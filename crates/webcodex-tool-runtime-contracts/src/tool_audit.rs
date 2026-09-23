@@ -3,7 +3,9 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use webcodex_core::audit_preview::{command_preview, process_preview};
-use webcodex_core::runner_protocol::{normalize_cargo_value, normalize_rust_test_filter};
+use webcodex_core::runner_protocol::{
+    normalize_cargo_packages, normalize_cargo_value, normalize_rust_test_filter,
+};
 use webcodex_core::workflow_session_contract::is_validation_like_execution_purpose;
 #[cfg(test)]
 use webcodex_tool_contracts::tool_call::ComputerSnapshotRegion;
@@ -295,6 +297,7 @@ fn typed_structured_validation_request_audit(
                     "all_features",
                     "no_default_features",
                     "package",
+                    "packages",
                     "timeout_secs",
                 ],
             );
@@ -1597,7 +1600,7 @@ fn canonical_cargo_validation_target(
         }
         "check" | "test" => {
             let is_test = subcommand == "test";
-            let mut package: Option<String> = None;
+            let mut packages = Vec::new();
             let mut features: Option<String> = None;
             let mut filter: Option<String> = None;
             let mut all_targets = false;
@@ -1611,13 +1614,15 @@ fn canonical_cargo_validation_target(
                 match arg.as_str() {
                     "-p" | "--package" | "--features" => {
                         let value = rest.get(index + 1)?.clone();
-                        let slot = if arg == "--features" {
-                            &mut features
+                        if arg == "--features" {
+                            if features.replace(value).is_some() {
+                                return None;
+                            }
                         } else {
-                            &mut package
-                        };
-                        if slot.replace(value).is_some() {
-                            return None;
+                            if is_test && !packages.is_empty() {
+                                return None;
+                            }
+                            packages.push(value);
                         }
                         index += 2;
                         continue;
@@ -1627,8 +1632,8 @@ fn canonical_cargo_validation_target(
                     "--all-features" if !all_features => all_features = true,
                     "--no-default-features" if !no_default_features => no_default_features = true,
                     "--no-run" if is_test && !no_run => no_run = true,
-                    _ if arg.starts_with("--package=") && package.is_none() => {
-                        package = Some(arg.trim_start_matches("--package=").to_string());
+                    _ if arg.starts_with("--package=") && (!is_test || packages.is_empty()) => {
+                        packages.push(arg.trim_start_matches("--package=").to_string());
                     }
                     _ if arg.starts_with("--features=") && features.is_none() => {
                         features = Some(arg.trim_start_matches("--features=").to_string());
@@ -1640,15 +1645,23 @@ fn canonical_cargo_validation_target(
                 }
                 index += 1;
             }
-            let package = match package {
-                Some(value) => normalize_cargo_value(&value).ok()?,
-                None => None,
-            };
+            let packages = normalize_cargo_packages(
+                None,
+                (!packages.is_empty()).then_some(packages.as_slice()),
+            )
+            .ok()?;
             let features = match features {
                 Some(value) => normalize_cargo_value(&value).ok()?,
                 None => None,
             };
-            input.insert("package".to_string(), serde_json::json!(package));
+            if is_test {
+                input.insert(
+                    "package".to_string(),
+                    serde_json::json!(packages.and_then(|mut values| values.pop())),
+                );
+            } else {
+                input.insert("packages".to_string(), serde_json::json!(packages));
+            }
             input.insert("features".to_string(), serde_json::json!(features));
             input.insert("all_targets".to_string(), Value::Bool(all_targets));
             input.insert("all_features".to_string(), Value::Bool(all_features));
@@ -1831,6 +1844,33 @@ mod execution_purpose_classification_tests {
             run_process_validation_identity("custom-validator", &args, None, Some("."), None)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn native_multi_package_cargo_check_matches_structured_identity() {
+        let args = vec![
+            "check".to_string(),
+            "--all-targets".to_string(),
+            "-p".to_string(),
+            "package-b".to_string(),
+            "-p".to_string(),
+            "package-a".to_string(),
+        ];
+        let native =
+            run_process_validation_identity("cargo", &args, None, Some("."), Some("validation"))
+                .expect("canonical Cargo validation identity");
+        let structured = webcodex_core::validation_identity::structured_validation_target_identity(
+            webcodex_core::validation_identity::ToolValidationIdentityKind::CargoCheck,
+            &serde_json::json!({
+                "cwd": ".",
+                "all_targets": true,
+                "packages": ["package-a", "package-b"]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(native.validation_tool, Some("cargo_check"));
+        assert_eq!(native.identity, structured);
     }
 }
 
@@ -4242,6 +4282,7 @@ impl ToolCallAuditProjection for ToolCall {
                 no_default_features,
                 features,
                 package,
+                packages,
                 timeout_secs,
                 sync_wait_secs,
                 ..
@@ -4255,6 +4296,7 @@ impl ToolCallAuditProjection for ToolCall {
                     "no_default_features": no_default_features,
                     "features": features,
                     "package": package,
+                    "packages": packages,
                     "timeout_secs": timeout_secs,
                     "sync_wait_secs": sync_wait_secs,
                 }),

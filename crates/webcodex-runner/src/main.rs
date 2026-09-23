@@ -1460,6 +1460,9 @@ fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabilities {
     // `--lib` expands the older structured Cargo test argv vocabulary, so
     // advertise it separately for mixed Server/Runner rolling upgrades.
     capabilities.structured_cargo_test_lib = true;
+    // Repeated `-p` selectors expand the older single-package Cargo check argv
+    // vocabulary, so advertise this independently for rolling upgrades.
+    capabilities.structured_cargo_check_packages = true;
     // This binary accepts both legacy Go validation argv from old Servers and
     // the current machine-readable JSON argv. Do not trust static config or
     // infer this from generic structured validation support.

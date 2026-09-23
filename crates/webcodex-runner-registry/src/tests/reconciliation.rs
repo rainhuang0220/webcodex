@@ -45,6 +45,7 @@ fn reconciliation_capabilities() -> RunnerCapabilities {
         structured_cargo_test_count_assertion: true,
         structured_cargo_test_execution_policy: true,
         structured_cargo_test_lib: true,
+        structured_cargo_check_packages: true,
         job_state_reconciliation: true,
         coding_agent_runs: false,
         ..Default::default()
@@ -170,6 +171,45 @@ fn cargo_lib_validation_start_metadata() -> ShellJobStartMetadata {
         }
     }
     metadata
+}
+
+fn multi_package_cargo_check_start_metadata() -> ShellJobStartMetadata {
+    let step = ShellJobValidationStep {
+        name: "check".to_string(),
+        program: "cargo".to_string(),
+        args: vec![
+            "check".to_string(),
+            "--all-targets".to_string(),
+            "-p".to_string(),
+            "package-a".to_string(),
+            "-p".to_string(),
+            "package-b".to_string(),
+        ],
+        env: Vec::new(),
+    };
+    ShellJobStartMetadata {
+        project_id: Some(RUNTIME_PROJECT_ID.to_string()),
+        session_id: Some(SESSION_ID.to_string()),
+        project_cwd: Some("/srv/demo".to_string()),
+        purpose: Some("validation".to_string()),
+        shell: Some("direct_argv".to_string()),
+        validation_steps: vec![step.clone()],
+        validation: Some(ShellJobValidationMetadata {
+            source_fence: None,
+            tool: "cargo_check".to_string(),
+            kind: "check".to_string(),
+            steps: vec![step],
+            effective_timeout_secs: 600,
+            sync_wait_secs: 1,
+            adapter: "cargo_check".to_string(),
+            validation_target_id: Some("target:1123456789abcdef01234567".to_string()),
+            minimum_tests: None,
+            require_tests: None,
+            no_run: None,
+        }),
+        visibility: ShellJobVisibility::Public,
+        ..Default::default()
+    }
 }
 
 async fn start_and_take_over(
@@ -574,6 +614,29 @@ async fn old_structured_runner_fails_closed_on_cargo_test_lib_selector() {
         .unwrap_err();
     assert!(
         error.contains("structured_cargo_test_lib_unavailable"),
+        "error={error}"
+    );
+    assert!(registry.list_jobs(Some(100)).await.is_empty());
+}
+
+#[tokio::test]
+async fn old_structured_runner_fails_closed_on_multi_package_cargo_check() {
+    let registry = RunnerRegistry::default();
+    let mut registration = register_request(INSTANCE_A, empty_inventory());
+    registration.capabilities.structured_cargo_check_packages = false;
+    assert!(registration.capabilities.structured_validation_argv);
+    registry.register(registration).await.unwrap();
+
+    let error = registry
+        .start_job_with_metadata(
+            start_request("validation"),
+            "tester".to_string(),
+            multi_package_cargo_check_start_metadata(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("structured_cargo_check_packages_unavailable"),
         "error={error}"
     );
     assert!(registry.list_jobs(Some(100)).await.is_empty());

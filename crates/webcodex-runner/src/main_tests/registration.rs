@@ -169,6 +169,7 @@ fn computer_register_request_announces_platform_capabilities_and_generation() {
     assert!(caps.structured_cargo_test_count_assertion);
     assert!(caps.structured_cargo_test_execution_policy);
     assert!(caps.structured_cargo_test_lib);
+    assert!(caps.structured_cargo_check_packages);
     assert!(caps.structured_go_test_json);
     assert!(caps.structured_go_test_tool);
     assert!(caps.structured_go_test_packages);

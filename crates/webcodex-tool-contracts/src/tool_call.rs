@@ -27,7 +27,9 @@ use webcodex_core::plugin::{
     validate_provider_id as validate_plugin_provider_id,
     validate_tool_name as validate_plugin_tool_name, PLUGIN_MAX_ARGUMENT_BYTES,
 };
-use webcodex_core::runner_protocol::ShellScriptLanguage;
+use webcodex_core::runner_protocol::{
+    normalize_cargo_packages, ShellScriptLanguage, CARGO_PACKAGE_MAX_ITEMS, CARGO_VALUE_MAX_BYTES,
+};
 use webcodex_core::runtime_contract::{
     validate_project_op_path, DEFAULT_OBSERVE_JOBS_TAIL_LINES,
     GIT_DIFF_HUNKS_CONTINUATION_MAX_BYTES,
@@ -2551,9 +2553,17 @@ pub enum ToolCall {
         /// Feature list passed to --features.
         #[serde(default)]
         features: Option<String>,
-        /// Package passed to -p.
+        /// Legacy single workspace package passed to `-p`. Mutually exclusive
+        /// with `packages`; internally canonicalized to the same package set.
         #[serde(default)]
         package: Option<String>,
+        /// Workspace packages passed as repeated `-p` selectors in one Cargo
+        /// invocation. Mutually exclusive with `package`; order and duplicates
+        /// are canonicalized because package selection is set-like.
+        #[schemars(length(min = 1, max = CARGO_PACKAGE_MAX_ITEMS))]
+        #[schemars(inner(length(min = 1, max = CARGO_VALUE_MAX_BYTES)))]
+        #[serde(default)]
+        packages: Option<Vec<String>>,
         #[schemars(extend("default" = 600))]
         /// Total validation runtime budget in seconds (minimum 1). Values above 3600 are accepted and
         /// clamped to 3600. Short validation returns immediately; longer validation keeps the same
@@ -5176,6 +5186,45 @@ fn validate_structured_validation_sync_wait(name: &str, arguments: &Value) -> Re
     Ok(())
 }
 
+fn canonicalize_cargo_check_packages(name: &str, arguments: &mut Value) -> Result<(), String> {
+    if name != "cargo_check" {
+        return Ok(());
+    }
+    let Some(object) = arguments.as_object_mut() else {
+        return Ok(());
+    };
+    let package_present = object.get("package").is_some_and(|value| !value.is_null());
+    let packages_present = object.get("packages").is_some_and(|value| !value.is_null());
+    if package_present && packages_present {
+        return Err(
+            "invalid arguments for tool 'cargo_check': package and packages are mutually exclusive"
+                .to_string(),
+        );
+    }
+
+    let package = object.get("package").and_then(Value::as_str);
+    let packages = match object.get("packages") {
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .map(|values| values.into_iter().map(str::to_string).collect::<Vec<_>>()),
+        Some(Value::Null) | None => None,
+        Some(_) => return Ok(()), // serde reports the canonical type error.
+    };
+    if package_present && package.is_none() || packages_present && packages.is_none() {
+        return Ok(()); // serde reports the canonical item/type error.
+    }
+    let normalized = normalize_cargo_packages(package, packages.as_deref())
+        .map_err(|reason| format!("invalid arguments for tool 'cargo_check': {reason}"))?;
+    object.remove("package");
+    object.remove("packages");
+    if let Some(packages) = normalized {
+        object.insert("packages".to_string(), serde_json::json!(packages));
+    }
+    Ok(())
+}
+
 impl ToolCall {
     pub fn from_tool_name(name: &str, arguments: Value) -> Result<Self, String> {
         validate_model_facing_assertion_name(name, &arguments)?;
@@ -5227,6 +5276,7 @@ impl ToolCall {
             );
         }
         let mut arguments = strip_tool_call_expectation_metadata(arguments);
+        canonicalize_cargo_check_packages(name, &mut arguments)?;
         if name == "tool_manifest" {
             if let Some(object) = arguments.as_object_mut() {
                 if !object.contains_key("include_recommended_flows") {

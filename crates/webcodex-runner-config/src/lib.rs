@@ -266,6 +266,9 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             // Cargo test --lib argv is accepted only by the running binary that
             // advertises the additive structured Cargo selector capability.
             structured_cargo_test_lib: false,
+            // Multi-package Cargo check argv is also an additive running-binary
+            // capability and is never inferred from generic validation argv.
+            structured_cargo_check_packages: false,
             // The running binary advertises this process-lifetime protocol
             // capability after installing its exact Go argv boundary.
             structured_go_test_json: false,

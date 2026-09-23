@@ -1175,6 +1175,18 @@ impl RunnerRegistry {
         }
         if validation_steps
             .iter()
+            .any(|step| step.is_multi_package_cargo_check())
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::StructuredCargoCheckPackages)
+        {
+            return Err(format!(
+                "capability_unavailable: structured_cargo_check_packages_unavailable: runner {} does not support repeated Cargo check package selectors",
+                client_id
+            ));
+        }
+        if validation_steps
+            .iter()
             .any(webcodex_core::runner_protocol::ShellJobValidationStep::is_structured_go_test_json)
             && !runner
                 .runner_features

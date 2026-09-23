@@ -3,7 +3,8 @@
 //! Source observations are a separate, deliberately weaker `validation_source` contract.
 
 use crate::runner_protocol::{
-    normalize_cargo_value, normalize_go_test_packages, normalize_rust_test_filter,
+    normalize_cargo_packages, normalize_cargo_value, normalize_go_test_packages,
+    normalize_rust_test_filter,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -110,17 +111,27 @@ pub fn structured_validation_target_identity(
                 return None;
             }
             let features = normalized_cargo_target_value(obj.get("features"))?;
-            let package = normalized_cargo_target_value(obj.get("package"))?;
-            serde_json::json!({
+            let packages =
+                normalized_cargo_target_packages(obj.get("package"), obj.get("packages"))?;
+            let mut semantic = serde_json::json!({
                 "tool": tool_name,
                 "kind": "check",
                 "cwd": cwd,
-                "package": package,
                 "features": features,
                 "all_targets": obj.get("all_targets").and_then(Value::as_bool).unwrap_or(true),
                 "all_features": obj.get("all_features").and_then(Value::as_bool).unwrap_or(false),
                 "no_default_features": obj.get("no_default_features").and_then(Value::as_bool).unwrap_or(false),
-            })
+            });
+            // Preserve the established identity encoding for omitted and
+            // single-package requests. Multi-package scopes use the additive
+            // canonical array shape.
+            if packages.as_ref().is_some_and(|packages| packages.len() > 1) {
+                semantic["packages"] = serde_json::json!(packages);
+            } else {
+                semantic["package"] =
+                    serde_json::json!(packages.and_then(|mut values| values.pop()));
+            }
+            semantic
         }
         ToolValidationIdentityKind::CargoTest => {
             if obj.get("filter_present").and_then(Value::as_bool) == Some(true)
@@ -206,6 +217,31 @@ fn normalized_cargo_target_value(value: Option<&Value>) -> Option<Option<String>
         return Some(None);
     }
     normalize_cargo_value(value.as_str()?).ok()
+}
+
+fn normalized_cargo_target_packages(
+    package: Option<&Value>,
+    packages: Option<&Value>,
+) -> Option<Option<Vec<String>>> {
+    let package = match package {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.as_str()),
+        Some(_) => return None,
+    };
+    let packages = match packages {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(values)) => Some(
+            values
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        ),
+        Some(_) => return None,
+    };
+    normalize_cargo_packages(package, packages.as_deref()).ok()
 }
 
 fn normalized_rust_test_target_filter(value: Option<&Value>) -> Option<Option<String>> {
@@ -319,5 +355,38 @@ mod tests {
             "target:0123456789abcdef01234567"
         ));
         assert!(!is_validation_execution_identity("target:short"));
+    }
+
+    #[test]
+    fn cargo_check_multi_package_identity_is_order_and_duplicate_independent() {
+        let kind = ToolValidationIdentityKind::CargoCheck;
+        let canonical = structured_validation_target_identity(
+            kind,
+            &serde_json::json!({"packages": ["package-a", "package-b"]}),
+        )
+        .unwrap();
+        let reordered = structured_validation_target_identity(
+            kind,
+            &serde_json::json!({"packages": [" package-b ", "package-a", "package-b"]}),
+        )
+        .unwrap();
+        let distinct = structured_validation_target_identity(
+            kind,
+            &serde_json::json!({"packages": ["package-a", "package-c"]}),
+        )
+        .unwrap();
+
+        assert_eq!(canonical, reordered);
+        assert_ne!(canonical, distinct);
+        assert_eq!(
+            structured_validation_target_identity(
+                kind,
+                &serde_json::json!({"package": "package-a"}),
+            ),
+            structured_validation_target_identity(
+                kind,
+                &serde_json::json!({"packages": ["package-a"]}),
+            )
+        );
     }
 }

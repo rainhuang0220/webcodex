@@ -604,6 +604,7 @@ async fn session_ssh_resource_rejects_structured_cargo_before_direct_sync_start(
                 no_default_features: None,
                 features: None,
                 package: None,
+                packages: None,
                 timeout_secs: Some(30),
                 sync_wait_secs: None,
             },

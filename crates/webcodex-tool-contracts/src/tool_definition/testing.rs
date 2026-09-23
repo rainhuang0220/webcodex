@@ -62,8 +62,8 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 false,
                 super::ToolSessionEvidencePolicy::NONE.validation_identity(super::ToolValidationIdentityKind::CargoCheck),
             ).with_composition_policy(super::ToolCompositionPolicy::Sequential),
-            "Structured cargo check (default --all-targets) for common supported validation with parsed diagnostics, validation identity, bounded projection, and same execution Job handoff. Intent is Runtime-derived; scoped flags only. sync_wait_secs controls synchronous handoff grace; omission uses the Runtime early-handoff default and never changes total timeout or retry semantics.",
-        ).with_gpt_action_description("Run structured cargo check with parsed diagnostics and bounded output. Longer validation may continue as the same Job; sync_wait_secs changes only synchronous handoff grace, never total timeout or retry semantics.")
+            "Structured cargo check (default --all-targets) for common supported validation with parsed diagnostics, validation identity, bounded projection, and same execution Job handoff. Use package for one workspace package or packages for a set; the selectors are mutually exclusive, and packages runs one Cargo invocation with repeated -p arguments after deterministic sort/dedup canonicalization. Intent is Runtime-derived; scoped flags only. sync_wait_secs controls synchronous handoff grace; omission uses the Runtime early-handoff default and never changes total timeout or retry semantics.",
+        ).with_gpt_action_description("Run one structured cargo check with parsed diagnostics. Use package for one workspace package or packages for a sorted/deduplicated set in the same Cargo process. Long validation continues as the same Job; sync_wait_secs changes only handoff grace, not timeout or retry.")
         .with_execution(super::ToolExecutionContract::new(
             super::ToolExecutionForm::StructuredValidation,
             super::ToolExecutionLifetime::Runner,

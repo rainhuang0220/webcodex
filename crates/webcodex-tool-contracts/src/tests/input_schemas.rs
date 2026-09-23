@@ -390,6 +390,22 @@ fn sync_validation_and_run_shell_timeout_schema_defers_upper_bounds_to_runtime()
 }
 
 #[test]
+fn cargo_check_schema_exposes_bounded_multi_package_selection() {
+    let specs = registered_tool_specs();
+    let schema = &spec_named(&specs, "cargo_check").input_schema;
+    let packages = &schema["properties"]["packages"];
+
+    assert_eq!(packages["type"], "array");
+    assert_eq!(packages["minItems"], 1);
+    assert!(packages["maxItems"].as_u64().is_some());
+    assert_eq!(packages["items"]["minLength"], 1);
+    assert_eq!(packages["items"]["maxLength"], 500);
+    assert!(packages["description"]
+        .as_str()
+        .is_some_and(|description| description.contains("package")));
+}
+
+#[test]
 fn cargo_test_schema_explains_execution_proof_policy() {
     let specs = registered_tool_specs();
     let spec = spec_named(&specs, "cargo_test");

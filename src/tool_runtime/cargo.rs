@@ -619,6 +619,7 @@ impl ToolRuntime {
                     no_default_features: None,
                     features: None,
                     package: None,
+                    cargo_packages: None,
                     no_run: None,
                     require_tests: None,
                     minimum_tests: None,
@@ -647,6 +648,11 @@ impl ToolRuntime {
         package: Option<String>,
         timeout_secs: Option<u64>,
     ) -> ToolResult {
+        let packages =
+            match crate::runner_protocol::normalize_cargo_packages(package.as_deref(), None) {
+                Ok(packages) => packages,
+                Err(error) => return ToolResult::err(error),
+            };
         self.cargo_check_with_context_inner(
             project,
             cwd,
@@ -654,7 +660,7 @@ impl ToolRuntime {
             all_features,
             no_default_features,
             features,
-            package,
+            packages,
             timeout_secs,
             None,
             None,
@@ -673,7 +679,7 @@ impl ToolRuntime {
         all_features: Option<bool>,
         no_default_features: Option<bool>,
         features: Option<String>,
-        package: Option<String>,
+        packages: Option<Vec<String>>,
         timeout_secs: Option<u64>,
         sync_wait_secs: Option<u64>,
         session_id: Option<String>,
@@ -687,7 +693,7 @@ impl ToolRuntime {
             all_features,
             no_default_features,
             features,
-            package,
+            packages,
             timeout_secs,
             sync_wait_secs,
             session_id,
@@ -706,7 +712,7 @@ impl ToolRuntime {
         all_features: Option<bool>,
         no_default_features: Option<bool>,
         features: Option<String>,
-        package: Option<String>,
+        packages: Option<Vec<String>>,
         timeout_secs: Option<u64>,
         sync_wait_secs: Option<u64>,
         session_id: Option<String>,
@@ -725,7 +731,8 @@ impl ToolRuntime {
                 all_features,
                 no_default_features,
                 features,
-                package,
+                package: None,
+                cargo_packages: packages,
                 no_run: None,
                 require_tests: None,
                 minimum_tests: None,
@@ -858,6 +865,7 @@ impl ToolRuntime {
                 no_default_features,
                 features,
                 package,
+                cargo_packages: None,
                 no_run,
                 require_tests,
                 minimum_tests,
@@ -907,6 +915,7 @@ impl ToolRuntime {
                 no_default_features: None,
                 features: None,
                 package: None,
+                cargo_packages: None,
                 no_run: None,
                 require_tests: None,
                 minimum_tests: None,
@@ -973,7 +982,7 @@ impl ToolRuntime {
                 "no_run": request.no_run,
                 "require_tests": request.require_tests,
                 "min_tests": request.minimum_tests,
-                "packages": request.go_packages.as_ref(),
+                "packages": request.cargo_packages.as_ref().or(request.go_packages.as_ref()),
             }),
         );
         let options = ValidationCommandOptions {
@@ -985,6 +994,7 @@ impl ToolRuntime {
             no_default_features: request.no_default_features,
             features: request.features,
             package: request.package,
+            cargo_packages: request.cargo_packages,
             no_run: request.no_run,
             go_packages: request.go_packages,
         };
@@ -1727,6 +1737,7 @@ struct ValidationRunRequest<'a> {
     no_default_features: Option<bool>,
     features: Option<String>,
     package: Option<String>,
+    cargo_packages: Option<Vec<String>>,
     no_run: Option<bool>,
     require_tests: Option<bool>,
     minimum_tests: Option<u64>,
@@ -1788,6 +1799,11 @@ fn validation_step(
             vec!["fmt".to_string(), "--".to_string(), "--check".to_string()],
         ),
         "cargo_check" => {
+            let packages = crate::runner_protocol::normalize_cargo_packages(
+                options.package.as_deref(),
+                options.cargo_packages.as_deref(),
+            )
+            .map_err(|reason| format!("packages {reason}"))?;
             let mut args = vec!["check".to_string()];
             if options.all_targets.unwrap_or(true) {
                 args.push("--all-targets".to_string());
@@ -1799,10 +1815,15 @@ fn validation_step(
                 args.push("--no-default-features".to_string());
             }
             push_paired_arg(&mut args, "--features", options.features.as_deref())?;
-            push_paired_arg(&mut args, "-p", options.package.as_deref())?;
+            for package in packages.into_iter().flatten() {
+                push_paired_arg(&mut args, "-p", Some(&package))?;
+            }
             ("check", "cargo", args)
         }
         "cargo_test" => {
+            if options.cargo_packages.is_some() {
+                return Err("cargo_test does not accept cargo_check packages".to_string());
+            }
             let mut args = vec!["test".to_string()];
             if let Some(filter) = options.filter.as_deref() {
                 // Whitespace-only filter means "no filter", matching the

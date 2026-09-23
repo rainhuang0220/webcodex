@@ -559,6 +559,57 @@ fn cargo_test_lib_false_canonicalizes_to_omission_and_true_is_preserved() {
 }
 
 #[test]
+fn cargo_check_package_selectors_canonicalize_to_one_internal_shape() {
+    let single = ToolCall::from_tool_name(
+        "cargo_check",
+        json!({"project": "demo", "package": " package-b "}),
+    )
+    .unwrap();
+    assert!(matches!(
+        single,
+        ToolCall::CargoCheck {
+            package: None,
+            packages: Some(ref packages),
+            ..
+        } if packages == &["package-b"]
+    ));
+
+    let multiple = ToolCall::from_tool_name(
+        "cargo_check",
+        json!({
+            "project": "demo",
+            "packages": ["package-c", " package-a ", "package-c", "package-b"]
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        multiple,
+        ToolCall::CargoCheck {
+            package: None,
+            packages: Some(ref packages),
+            ..
+        } if packages == &["package-a", "package-b", "package-c"]
+    ));
+
+    for invalid in [
+        json!({"project": "demo", "package": "package-a", "packages": ["package-b"]}),
+        json!({"project": "demo", "packages": []}),
+        json!({"project": "demo", "packages": ["   "]}),
+    ] {
+        let error = ToolCall::from_tool_name("cargo_check", invalid)
+            .expect_err("invalid package selector must fail closed");
+        assert!(error.contains("package"), "{error}");
+    }
+
+    let error = ToolCall::from_tool_name("cargo_check", json!({"project": "demo", "packages": []}))
+        .expect_err("empty package selection must fail closed");
+    assert_eq!(
+        error,
+        "invalid arguments for tool 'cargo_check': packages must contain between 1 and 32 items"
+    );
+}
+
+#[test]
 fn tool_manifest_default_flows_follow_discovery_shape() {
     for arguments in [
         json!({"tool_name": "cargo_test"}),

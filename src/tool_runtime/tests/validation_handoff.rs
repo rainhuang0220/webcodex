@@ -409,6 +409,44 @@ async fn go_test_rejects_empty_or_oversized_package_lists_before_dispatch() {
 }
 
 #[tokio::test]
+async fn multi_package_cargo_check_reports_legacy_runner_capability_before_job_creation() {
+    let client_id = "vhandoff-cargo-check-packages-legacy-runner";
+    let runtime = runtime_with_agent_project(client_id)
+        .with_validation_sync_wait(std::time::Duration::from_millis(20));
+    register_agent(
+        &runtime,
+        client_id,
+        None,
+        RunnerCapabilities {
+            async_shell_jobs: true,
+            structured_validation_argv: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let project = agent_test_project_id(client_id);
+    let auth = auth_context(None, true);
+    let call = ToolCall::from_tool_name(
+        "cargo_check",
+        json!({
+            "project": project,
+            "packages": ["package-a", "package-b"]
+        }),
+    )
+    .unwrap();
+
+    let result = runtime.dispatch_with_auth(call, Some(&auth)).await;
+
+    assert!(!result.success);
+    assert_eq!(result.output["command_started"], false);
+    assert_eq!(result.output["failure_kind"], "capability_unavailable");
+    assert!(runtime.runner_registry.list_jobs(Some(10)).await.is_empty());
+    assert!(probe_patch_agent_request(&runtime, client_id)
+        .await
+        .is_none());
+}
+
+#[tokio::test]
 async fn fast_go_test_uses_exact_structured_argv_cwd_and_records_session_evidence() {
     let client_id = "vhandoff-go-fast";
     let tmp = tempfile::tempdir().unwrap();
@@ -768,6 +806,7 @@ async fn fast_cargo_check_completes_in_windows_and_leaves_no_visible_job() {
                         no_default_features: None,
                         features: None,
                         package: None,
+                        packages: None,
                         timeout_secs: Some(600),
                         sync_wait_secs: Some(60),
                     },
@@ -977,6 +1016,89 @@ async fn default_cargo_check_handoff_preserves_same_execution_through_terminal()
             .is_none(),
         "terminal completion must remain the original execution"
     );
+}
+
+#[tokio::test]
+async fn multi_package_cargo_check_uses_one_execution_and_one_same_process_job() {
+    let client_id = "vhandoff-multi-package-check";
+    let runtime = runtime_with_agent_project(client_id)
+        .with_validation_sync_wait(std::time::Duration::from_millis(20));
+    register_agent(
+        &runtime,
+        client_id,
+        None,
+        RunnerCapabilities {
+            async_shell_jobs: true,
+            structured_validation_argv: true,
+            structured_cargo_check_packages: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let project = agent_test_project_id(client_id);
+    let auth = auth_context(None, true);
+    let call = ToolCall::from_tool_name(
+        "cargo_check",
+        json!({
+            "project": project,
+            "packages": ["package-c", "package-a", "package-b", "package-a"],
+            "timeout_secs": 600,
+            "sync_wait_secs": 1
+        }),
+    )
+    .unwrap();
+
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        let auth = auth.clone();
+        async move { runtime.dispatch_with_auth(call, Some(&auth)).await }
+    });
+    let (request, job_id) = poll_start_validation_job(&runtime, client_id).await;
+    let validation = request
+        .job_context
+        .as_ref()
+        .and_then(|context| context.validation.as_ref())
+        .expect("one durable validation context");
+    assert_eq!(validation.steps.len(), 1);
+    assert_eq!(validation.effective_timeout_secs, 600);
+    assert_eq!(validation.sync_wait_secs, 1);
+    assert_eq!(
+        validation.steps[0].args,
+        [
+            "check",
+            "--all-targets",
+            "-p",
+            "package-a",
+            "-p",
+            "package-b",
+            "-p",
+            "package-c"
+        ]
+    );
+    assert!(probe_patch_agent_request(&runtime, client_id)
+        .await
+        .is_none());
+
+    runtime
+        .runner_registry
+        .update_job(cargo_test_update(
+            client_id,
+            &request.request_id,
+            &job_id,
+            "running",
+            "Checking package-a v0.1.0\n",
+            "",
+            None,
+            running_progress("check"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let result = task.await.unwrap();
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(result.output["job_id"], job_id);
+    assert_eq!(result.output["effective_timeout_secs"], 600);
+    assert_eq!(runtime.runner_registry.list_jobs(Some(10)).await.len(), 1);
 }
 
 #[tokio::test]
@@ -1893,6 +2015,7 @@ async fn async_same_cargo_check_target_success_resolves_prior_failure_without_du
                         no_default_features: None,
                         features: None,
                         package: None,
+                        packages: None,
                         timeout_secs: Some(600),
                         sync_wait_secs: None,
                     },
@@ -1947,6 +2070,7 @@ async fn async_same_cargo_check_target_success_resolves_prior_failure_without_du
                         no_default_features: None,
                         features: None,
                         package: None,
+                        packages: None,
                         timeout_secs: Some(600),
                         sync_wait_secs: None,
                     },
@@ -2476,6 +2600,7 @@ async fn invalid_cargo_args_fail_before_command_or_agent_request() {
                 no_default_features: None,
                 features: Some("--no-run".to_string()),
                 package: None,
+                packages: None,
                 timeout_secs: Some(1800),
                 sync_wait_secs: None,
             },
@@ -2491,6 +2616,7 @@ async fn invalid_cargo_args_fail_before_command_or_agent_request() {
                 no_default_features: None,
                 features: None,
                 package: Some("--all-features".to_string()),
+                packages: None,
                 timeout_secs: Some(1800),
                 sync_wait_secs: None,
             },
@@ -2526,6 +2652,7 @@ async fn invalid_cargo_args_fail_before_command_or_agent_request() {
                 no_default_features: None,
                 features: Some("a".repeat(crate::runner_protocol::CARGO_VALUE_MAX_BYTES + 1)),
                 package: None,
+                packages: None,
                 timeout_secs: Some(1800),
                 sync_wait_secs: None,
             },

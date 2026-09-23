@@ -81,12 +81,47 @@ fn rust_profile_selects_cargo_check_adapter_and_preserves_command() {
             .unwrap(),
         "cargo check --all-targets"
     );
+    let legacy_single = adapter
+        .build_command(ValidationCommandOptions {
+            package: Some("webcodex".to_string()),
+            ..ValidationCommandOptions::default()
+        })
+        .unwrap();
+    let canonical_single = adapter
+        .build_command(ValidationCommandOptions {
+            cargo_packages: Some(vec!["webcodex".to_string()]),
+            ..ValidationCommandOptions::default()
+        })
+        .unwrap();
+    assert_eq!(legacy_single, "cargo check --all-targets -p 'webcodex'");
+    assert_eq!(legacy_single, canonical_single);
     assert!(adapter
         .build_command(ValidationCommandOptions {
             features: Some("feat\0x".to_string()),
             ..ValidationCommandOptions::default()
         })
         .is_err());
+}
+
+#[test]
+fn cargo_check_builds_one_command_with_repeated_package_selectors() {
+    let adapter = validation_adapter_for_tool("cargo_check").expect("cargo_check adapter");
+    let command = adapter
+        .build_command(ValidationCommandOptions {
+            cargo_packages: Some(vec![
+                "package-a".to_string(),
+                "package-b".to_string(),
+                "package-c".to_string(),
+            ]),
+            ..ValidationCommandOptions::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        command,
+        "cargo check --all-targets -p 'package-a' -p 'package-b' -p 'package-c'"
+    );
+    assert_eq!(command.matches("cargo check").count(), 1);
 }
 
 #[test]

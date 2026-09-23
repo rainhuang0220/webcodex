@@ -16,6 +16,8 @@ pub struct ValidationCommandOptions {
     pub no_default_features: Option<bool>,
     pub features: Option<String>,
     pub package: Option<String>,
+    /// Canonical sorted, duplicate-free package scope for `cargo_check`.
+    pub cargo_packages: Option<Vec<String>>,
     pub no_run: Option<bool>,
     /// First-class `go_test` package scope. Other validation adapters must
     /// reject this Go-specific option rather than silently ignoring it.
