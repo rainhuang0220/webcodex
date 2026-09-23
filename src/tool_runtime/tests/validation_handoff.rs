@@ -447,6 +447,50 @@ async fn multi_package_cargo_check_reports_legacy_runner_capability_before_job_c
 }
 
 #[tokio::test]
+async fn multi_package_cargo_check_direct_sync_still_requires_runner_capability() {
+    let client_id = "vhandoff-cargo-check-packages-legacy-direct";
+    let runtime = runtime_with_agent_project(client_id)
+        .with_validation_sync_wait(std::time::Duration::from_millis(20));
+    register_agent(
+        &runtime,
+        client_id,
+        None,
+        RunnerCapabilities {
+            async_shell_jobs: true,
+            structured_validation_argv: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let project = agent_test_project_id(client_id);
+    let auth = auth_context(None, true);
+    let call = ToolCall::from_tool_name(
+        "cargo_check",
+        json!({
+            "project": project,
+            "packages": ["package-a", "package-b"],
+            "timeout_secs": 30,
+            "sync_wait_secs": 30
+        }),
+    )
+    .unwrap();
+
+    let result = runtime.dispatch_with_auth(call, Some(&auth)).await;
+
+    assert!(!result.success);
+    assert_eq!(result.output["command_started"], false);
+    assert_eq!(result.output["failure_kind"], "capability_unavailable");
+    assert!(result
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("structured_cargo_check_packages_unavailable")));
+    assert!(runtime.runner_registry.list_jobs(Some(10)).await.is_empty());
+    assert!(probe_patch_agent_request(&runtime, client_id)
+        .await
+        .is_none());
+}
+
+#[tokio::test]
 async fn fast_go_test_uses_exact_structured_argv_cwd_and_records_session_evidence() {
     let client_id = "vhandoff-go-fast";
     let tmp = tempfile::tempdir().unwrap();

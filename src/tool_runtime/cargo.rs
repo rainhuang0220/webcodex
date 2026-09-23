@@ -20,7 +20,7 @@ use super::validation_profile::{
 };
 use super::ToolRuntime;
 use crate::auth::AuthContext;
-use crate::runner_http::ShellJobStartMetadata;
+use crate::runner_http::{RunnerFeature, ShellJobStartMetadata};
 use crate::runner_protocol::{
     ShellCommandExecutionState, ShellJobOpRequest, ShellJobValidationMetadata,
     ShellJobValidationStep,
@@ -1011,6 +1011,12 @@ impl ToolRuntime {
                 ))
             }
         };
+        let requires_multi_package_cargo_check = tool_name == "cargo_check"
+            && crate::runner_protocol::normalize_cargo_packages(
+                options.package.as_deref(),
+                options.cargo_packages.as_deref(),
+            )
+            .is_ok_and(|packages| packages.is_some_and(|packages| packages.len() > 1));
         // Pre-execution validation happens before any execution is created, so
         // a rejection never leaves a Job or a running process behind.
         let resolved = match self
@@ -1024,7 +1030,33 @@ impl ToolRuntime {
             )),
         };
         let source_project = resolved.resolved_id;
+        let runner_client_id = resolved.config.client_id.clone();
         let resolved = resolved.config;
+        if requires_multi_package_cargo_check {
+            let access = crate::runner_http::runner_access_from_auth(request.auth);
+            let runner = match self
+                .runner_registry
+                .get_runner_semantic_view_checked_for_auth(&runner_client_id, access.as_ref())
+                .await
+            {
+                Ok(runner) => runner,
+                Err(error) => {
+                    return ToolResult::err(command_rejected_message(
+                        error,
+                        "verify the target Runner is connected and authorized, then retry.",
+                    ))
+                }
+            };
+            if !runner.supports(RunnerFeature::StructuredCargoCheckPackages) {
+                return ToolResult::err(command_rejected_message(
+                    format!(
+                        "capability_unavailable: structured_cargo_check_packages_unavailable: runner {} does not support repeated Cargo check package selectors",
+                        runner_client_id
+                    ),
+                    "upgrade the target Runner or use the legacy single-package selector.",
+                ));
+            }
+        }
         let purpose = execution_purpose_for_validation_kind(adapter.validation_kind());
         let timeout_secs = budget.effective_timeout_secs;
         let sync_wait_secs = budget.sync_wait_secs;
