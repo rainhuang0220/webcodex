@@ -612,14 +612,17 @@ impl Database {
             -- Model-facing selector only. Rows are immutable: a newer Endpoint
             -- generation inserts a new index and never rewrites an older one.
             CREATE TABLE IF NOT EXISTS wc_agent_continuation_references (
+                principal_kind TEXT NOT NULL,
                 principal_digest TEXT NOT NULL,
                 ref_index INTEGER NOT NULL CHECK(ref_index >= 1),
                 agent_id TEXT NOT NULL,
                 endpoint_id TEXT NOT NULL,
                 controller_generation INTEGER NOT NULL CHECK(controller_generation >= 1),
                 created_at_unix_ms INTEGER NOT NULL,
-                PRIMARY KEY(principal_digest, ref_index),
-                UNIQUE(principal_digest, agent_id, endpoint_id, controller_generation)
+                PRIMARY KEY(principal_kind, principal_digest, ref_index),
+                UNIQUE(
+                    principal_kind, principal_digest, agent_id, endpoint_id, controller_generation
+                )
             );
             ",
         )?;

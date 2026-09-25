@@ -59,11 +59,13 @@ impl Database {
             .query_row(
                 "SELECT ref_index, agent_id, endpoint_id, controller_generation
                  FROM wc_agent_continuation_references
-                 WHERE principal_digest = ?1
-                   AND agent_id = ?2
-                   AND endpoint_id = ?3
-                   AND controller_generation = ?4",
+                 WHERE principal_kind = ?1
+                   AND principal_digest = ?2
+                   AND agent_id = ?3
+                   AND endpoint_id = ?4
+                   AND controller_generation = ?5",
                 params![
+                    principal.kind,
                     principal.digest,
                     agent_id,
                     endpoint_id,
@@ -82,8 +84,8 @@ impl Database {
             .query_row(
                 "SELECT COALESCE(MAX(ref_index), 0) + 1
                  FROM wc_agent_continuation_references
-                 WHERE principal_digest = ?1",
-                params![principal.digest],
+                 WHERE principal_kind = ?1 AND principal_digest = ?2",
+                params![principal.kind, principal.digest],
                 |row| row.get(0),
             )
             .map_err(reference_store_error)?;
@@ -96,10 +98,11 @@ impl Database {
         transaction
             .execute(
                 "INSERT INTO wc_agent_continuation_references (
-                    principal_digest, ref_index, agent_id, endpoint_id,
+                    principal_kind, principal_digest, ref_index, agent_id, endpoint_id,
                     controller_generation, created_at_unix_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
+                    principal.kind,
                     principal.digest,
                     next_index,
                     agent_id,
@@ -132,8 +135,8 @@ impl Database {
         conn.query_row(
             "SELECT ref_index, agent_id, endpoint_id, controller_generation
              FROM wc_agent_continuation_references
-             WHERE principal_digest = ?1 AND ref_index = ?2",
-            params![principal.digest, ref_index],
+             WHERE principal_kind = ?1 AND principal_digest = ?2 AND ref_index = ?3",
+            params![principal.kind, principal.digest, ref_index],
             row_to_reference,
         )
         .optional()

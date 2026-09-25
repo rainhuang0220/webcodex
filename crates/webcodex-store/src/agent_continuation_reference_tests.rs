@@ -1,11 +1,15 @@
 use super::communication::CommunicationPrincipal;
 use super::Database;
 
-fn principal(hex: char) -> CommunicationPrincipal {
+fn principal_with_kind(kind: &str, hex: char) -> CommunicationPrincipal {
     CommunicationPrincipal {
-        kind: "managed-user".to_string(),
+        kind: kind.to_string(),
         digest: format!("wc_commprincipal_{}", hex.to_string().repeat(64)),
     }
+}
+
+fn principal(hex: char) -> CommunicationPrincipal {
+    principal_with_kind("managed-user", hex)
 }
 
 const AGENT: &str = "wc_dagent_qqqqqqqqqqqqqqqq";
@@ -32,8 +36,8 @@ fn agent_continuation_references_pin_generation_and_do_not_retarget() {
         .conn_for_tests()
         .query_row(
             "SELECT created_at_unix_ms FROM wc_agent_continuation_references
-             WHERE principal_digest = ?1 AND ref_index = 1",
-            [alice.digest.as_str()],
+             WHERE principal_kind = ?1 AND principal_digest = ?2 AND ref_index = 1",
+            [alice.kind.as_str(), alice.digest.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -60,6 +64,26 @@ fn agent_continuation_references_pin_generation_and_do_not_retarget() {
             .unwrap()
             .is_none(),
         "another principal must not see Alice's later index"
+    );
+    let same_digest_other_kind = principal_with_kind("service", 'a');
+    let other_kind_same_tuple = db
+        .get_or_create_agent_continuation_reference(
+            &same_digest_other_kind,
+            AGENT,
+            ENDPOINT_A,
+            1,
+            40,
+        )
+        .unwrap();
+    assert_eq!(
+        other_kind_same_tuple.ref_index, 1,
+        "principal kind participates in the selector namespace"
+    );
+    assert!(
+        db.lookup_agent_continuation_reference(&same_digest_other_kind, 2)
+            .unwrap()
+            .is_none(),
+        "same digest text under another principal kind must remain isolated"
     );
     drop(db);
 

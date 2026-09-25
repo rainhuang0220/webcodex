@@ -106,6 +106,13 @@ fn agent_continuation_ref_presents_the_pinned_tuple_and_fails_closed() {
         presented.output["agent_continuation"]["controller_generation"],
         first_generation
     );
+    let audit = crate::tool_runtime::tool_audit::session_log_result_for_tool(
+        "present_agent_continuation",
+        &presented.output,
+    );
+    assert_eq!(audit["agent_id"], agent_id);
+    assert_eq!(audit["endpoint_id"], first_endpoint);
+    assert_eq!(audit["controller_generation"], first_generation);
     let same_principal_other_key = present_ref(&runtime, Some(&alice_other_key), &first_ref);
     assert!(
         same_principal_other_key.success,
