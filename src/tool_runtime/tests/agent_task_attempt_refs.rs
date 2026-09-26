@@ -246,6 +246,22 @@ fn agent_task_attempt_ref_does_not_retarget_after_generation_expiry_or_takeover(
             [attempt_id.as_str()],
         )
         .unwrap();
+    let replay_after_replacement = start_attempt(
+        &runtime,
+        Some(&alice),
+        &generation_task,
+        &first,
+        "generation-start",
+    );
+    assert_eq!(replay_after_replacement["replayed"], true);
+    assert_eq!(
+        replay_after_replacement["attempt_ref"], attempt_ref,
+        "an idempotent start replay must return the original selector even after its pinned generation becomes stale"
+    );
+    assert_eq!(
+        replay_after_replacement["attempt"]["attempt_controller_generation"], 2,
+        "the replayed Attempt snapshot may still report current mutable state"
+    );
     let stale_generation = continue_ref(&runtime, Some(&alice), &attempt_ref);
     assert_eq!(
         stale_generation.output["error_kind"],

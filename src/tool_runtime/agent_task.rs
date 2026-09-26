@@ -485,13 +485,23 @@ impl ToolRuntime {
             &idempotency_key,
         ) {
             Ok(result) => {
+                // A keyed start replay names the original start operation, whose
+                // Attempt controller generation is always 1. The current Attempt
+                // snapshot may report a later replacement generation, but silently
+                // upgrading the selector would violate start idempotency and turn a
+                // stale ref into a different continuation identity.
+                let reference_generation = if result.replayed {
+                    1
+                } else {
+                    result.attempt.attempt_controller_generation
+                };
                 let attempt_ref = self.issue_agent_task_attempt_ref(
                     &principal,
                     &task_id,
                     &result.attempt.attempt_id,
                     &assignee_agent_id,
                     &result.attempt_fence,
-                    result.attempt.attempt_controller_generation,
+                    reference_generation,
                 );
                 let mut output = match to_value(&result) {
                     Ok(value) => value,
