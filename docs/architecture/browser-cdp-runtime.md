@@ -135,8 +135,9 @@ rejection are unchanged.
 Element authority is fenced to Browser identity, page identity, current document
 (loader) identity, and snapshot generation. Navigation, document replacement, page
 replacement, a newer snapshot, or Runner restart makes older element IDs stale.
-Before `click` or `input_text`, the runtime re-observes the current page document
-and requires the complete fence to remain exact. A stale failure never guesses or
+Before any element effect (`click`, `input_text`, `select_option`, `set_value`, or
+`upload_file`), the runtime re-observes the current page document and requires the
+complete fence to remain exact. A stale failure never guesses or
 retargets a replacement element; recovery is a fresh
 `browser_observe(action=snapshot, ...)`.
 
@@ -183,7 +184,7 @@ Browser does not introduce a second image pipeline or a Phase 1 MCP App.
 ## Phase 1 limits and dogfood
 
 Phase 1 intentionally does not implement arbitrary JavaScript/evaluate, cookies or
-storage mutation, downloads, file upload, real-profile attachment, remote CDP
+storage mutation, downloads, real-profile attachment, remote CDP
 attachment, durable profiles, network interception, proxy configuration,
 extensions, password-manager access, credential extraction, cloud Browser
 scheduling, Browser MCP Apps, or Agent-specific Browser ownership.
