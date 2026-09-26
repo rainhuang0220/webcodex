@@ -1654,7 +1654,8 @@ fn capability_for_element(
             }
             _ => legacy_role_capability(role),
         },
-        "button" | "a" | "summary" => ControlCapability::click(),
+        "button" | "summary" => ControlCapability::click(),
+        "a" => legacy_role_capability(role),
         _ if role == "option" => ControlCapability::default(),
         _ => legacy_role_capability(role),
     }
@@ -2430,6 +2431,8 @@ mod tests {
                     {"nodeType": 1, "localName": "div", "backendNodeId": 119},
                     {"nodeType": 1, "localName": "div", "backendNodeId": 120},
                     {"nodeType": 1, "localName": "button", "backendNodeId": 200},
+                    {"nodeType": 1, "localName": "a", "backendNodeId": 202},
+                    {"nodeType": 1, "localName": "a", "backendNodeId": 203, "attributes": ["href", "https://example.test/"]},
                     {
                         "nodeType": 1,
                         "localName": "ua-like",
@@ -2469,6 +2472,8 @@ mod tests {
             ax("aria-spin", "spinbutton", Some(119)),
             ax("aria-slider", "slider", Some(120)),
             ax("button", "button", Some(200)),
+            ax("plain-anchor", "generic", Some(202)),
+            ax("link", "link", Some(203)),
             ax("shadow-spin", "spinbutton", Some(123)),
             ax("shadow-button", "button", Some(124)),
             ax("week-part-a", "spinbutton", Some(65)),
@@ -2509,6 +2514,11 @@ mod tests {
         assert!(actions("aria-slider").is_empty());
         assert!(actions("shadow-spin").is_empty());
         assert_eq!(actions("button"), ["click"]);
+        assert!(
+            actions("plain-anchor").is_empty(),
+            "DOM classification must not expand a non-link anchor beyond its accessibility semantics"
+        );
+        assert_eq!(actions("link"), ["click"]);
         assert_eq!(actions("shadow-button"), ["click"]);
         assert!(
             actions("legacy-button").is_empty(),
