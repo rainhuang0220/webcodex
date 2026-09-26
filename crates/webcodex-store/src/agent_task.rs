@@ -697,6 +697,7 @@ impl Database {
             -- never rewrites an older one. The stored fence is the same proof
             -- start already issued; this row is not authority.
             CREATE TABLE IF NOT EXISTS wc_agent_task_attempt_references (
+                principal_kind TEXT NOT NULL,
                 principal_digest TEXT NOT NULL,
                 ref_index INTEGER NOT NULL CHECK(ref_index >= 1),
                 task_id TEXT NOT NULL,
@@ -705,9 +706,9 @@ impl Database {
                 attempt_fence TEXT NOT NULL,
                 attempt_controller_generation INTEGER NOT NULL CHECK(attempt_controller_generation >= 1),
                 created_at_unix_ms INTEGER NOT NULL,
-                PRIMARY KEY(principal_digest, ref_index),
+                PRIMARY KEY(principal_kind, principal_digest, ref_index),
                 UNIQUE(
-                    principal_digest, task_id, attempt_id, assignee_agent_id,
+                    principal_kind, principal_digest, task_id, attempt_id, assignee_agent_id,
                     attempt_fence, attempt_controller_generation
                 )
             );

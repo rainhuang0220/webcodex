@@ -6,14 +6,18 @@ use super::Database;
 
 const T0: i64 = 1_000_000;
 
-fn principal(hex: char) -> CommunicationPrincipal {
+fn principal_with_kind(kind: &str, hex: char) -> CommunicationPrincipal {
     CommunicationPrincipal {
-        kind: "user".to_string(),
+        kind: kind.to_string(),
         digest: format!(
             "{COMMUNICATION_PRINCIPAL_DIGEST_PREFIX}{}",
             hex.to_string().repeat(64)
         ),
     }
+}
+
+fn principal(hex: char) -> CommunicationPrincipal {
+    principal_with_kind("user", hex)
 }
 
 fn agent(db: &Database, owner: &CommunicationPrincipal, label: &str) -> String {
@@ -105,8 +109,8 @@ fn agent_task_attempt_references_pin_generation_and_do_not_retarget() {
         .conn_for_tests()
         .query_row(
             "SELECT created_at_unix_ms FROM wc_agent_task_attempt_references
-             WHERE principal_digest = ?1 AND ref_index = 1",
-            [alice.digest.as_str()],
+             WHERE principal_kind = ?1 AND principal_digest = ?2 AND ref_index = 1",
+            [alice.kind.as_str(), alice.digest.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -132,6 +136,27 @@ fn agent_task_attempt_references_pin_generation_and_do_not_retarget() {
         first,
         "the old index stays pinned to generation 1"
     );
+
+    let same_digest_other_kind = principal_with_kind("service", 'a');
+    let other_kind_ref = db
+        .get_or_create_agent_task_attempt_reference(
+            &same_digest_other_kind,
+            &task_id,
+            &started.attempt.attempt_id,
+            &assignee,
+            &fence,
+            3,
+            T0 + 15,
+        )
+        .unwrap();
+    assert_eq!(
+        other_kind_ref.ref_index, 1,
+        "principal kind participates in the selector namespace"
+    );
+    assert!(db
+        .lookup_agent_task_attempt_reference(&same_digest_other_kind, 2)
+        .unwrap()
+        .is_none());
 
     let bob_same_tuple = db
         .get_or_create_agent_task_attempt_reference(
