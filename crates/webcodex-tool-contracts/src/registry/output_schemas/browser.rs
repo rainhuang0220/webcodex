@@ -15,9 +15,15 @@ fn target_schema() -> Value {
                 "properties": {
                     "browser_observe": {"type": "boolean"},
                     "browser_control": {"type": "boolean"},
+                    "browser_element_action_admission": {"type": "boolean"},
                     "browser_launch": {"type": "boolean"}
                 },
-                "required": ["browser_observe", "browser_control", "browser_launch"]
+                "required": [
+                    "browser_observe",
+                    "browser_control",
+                    "browser_element_action_admission",
+                    "browser_launch"
+                ]
             }
         },
         "required": ["client_id", "display_name", "connected", "capabilities"]
