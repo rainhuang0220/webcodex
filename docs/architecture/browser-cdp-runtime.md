@@ -90,10 +90,27 @@ Model-facing `browser_id`, `page_id`, and `element_id` values are opaque,
 process-local identities. They are not aliases for CDP target IDs, backend node
 IDs, ports, PIDs, or filesystem paths.
 
-A semantic snapshot is bounded and primarily derived from CDP Accessibility
-semantics. It returns enough normalized role/name/value metadata to find readable
-content and interactive controls without returning unbounded raw HTML, DOM, or AX
-trees. Actionable snapshot nodes receive fresh opaque `element_id` values.
+A semantic snapshot is bounded and derived from CDP Accessibility semantics plus
+one DOM control classification. It returns enough normalized role/name/value
+metadata to find readable content and interactive controls without returning
+unbounded raw HTML, DOM, or AX trees. Actionable snapshot nodes receive fresh
+opaque `element_id` values and an `actions` list.
+
+`actions` is the canonical admission for that element. It is not inferred from
+the accessibility role alone. The resolved element's local name and input type
+select the effect: native `select` admits `select_option`; text-like inputs and
+`textarea` admit `click` and `input_text`; `number`, `range`, date/time-like
+inputs, and `color` admit `set_value`; `file` admits `upload_file`. Native
+`option` nodes remain observable choices and admit no effect. Accessibility
+`spinbutton` and `slider` nodes are not generically actionable. Descendants
+inside an `input`, `select`, or `textarea` shadow tree admit nothing; the owning
+control carries the structured action. If that owner is absent from the
+accessibility tree, one descendant is retargeted to the owner's backend node.
+When DOM classification is unavailable, previous light-DOM role admission remains
+and no new structured authority is added. `click`, `input_text`, `select_option`,
+`set_value`, and `upload_file` reject an element that does not list that action.
+Document loader identity, snapshot generation, and stale-element rejection are
+unchanged.
 
 Element authority is fenced to Browser identity, page identity, current document
 (loader) identity, and snapshot generation. Navigation, document replacement, page

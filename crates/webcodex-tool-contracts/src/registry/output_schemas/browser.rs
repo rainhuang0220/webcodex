@@ -59,6 +59,15 @@ fn node_schema() -> Value {
             "name": {"anyOf": [{"type": "string", "maxLength": 512}, {"type": "null"}]},
             "value": {"anyOf": [{"type": "string", "maxLength": 512}, {"type": "null"}]},
             "element_id": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+            "actions": {
+                "type": "array",
+                "maxItems": 5,
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "enum": ["click", "input_text", "select_option", "set_value", "upload_file"]
+                }
+            },
             "actionable": {"type": "boolean"}
         },
         "required": ["role", "actionable"]
