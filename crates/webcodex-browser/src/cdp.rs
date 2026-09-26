@@ -771,8 +771,9 @@ impl BrowserBackend for CdpBackend {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        // DOM classification is required for structured controls. A failed or
-        // oversized document keeps legacy role admission and grants nothing new.
+        // DOM classification is required for structured controls. A failed
+        // document does not grant legacy click to descendants of browser-private
+        // form controls. Nodes omitted from a successful index admit nothing.
         let dom_root = self
             .page_call_until(
                 target_id,
@@ -1449,7 +1450,7 @@ fn parse_ax_snapshot_nodes(raw_nodes: &[Value]) -> (Vec<BackendNode>, bool) {
 
 fn project_ax_nodes(raw_nodes: &[Value], dom_root: Option<&Value>) -> (Vec<BackendNode>, bool) {
     let (mut nodes, truncated) = parse_ax_snapshot_nodes(raw_nodes);
-    apply_dom_capabilities(&mut nodes, dom_root);
+    apply_dom_capabilities(&mut nodes, raw_nodes, dom_root);
     (nodes, truncated)
 }
 
@@ -1461,25 +1462,38 @@ struct DomControlFacts {
     host_backend_node_id: Option<i64>,
     host_local_name: Option<String>,
     host_input_type: Option<String>,
+    host_label: Option<String>,
+    host_value: Option<String>,
 }
 
 struct ShadowHost {
     backend_node_id: Option<i64>,
     local_name: String,
     input_type: Option<String>,
+    label: Option<String>,
+    value: Option<String>,
 }
 
-fn apply_dom_capabilities(nodes: &mut [BackendNode], dom_root: Option<&Value>) {
-    let index = dom_root.map(index_dom_controls).unwrap_or_default();
+fn apply_dom_capabilities(
+    nodes: &mut Vec<BackendNode>,
+    raw_nodes: &[Value],
+    dom_root: Option<&Value>,
+) {
+    let index = dom_root.map(index_dom_controls);
+    let private_descendants = browser_private_control_descendants(raw_nodes);
     let known_ids = nodes
         .iter()
         .filter_map(|node| node.backend_node_id)
         .collect::<HashSet<_>>();
     for node in nodes.iter_mut() {
-        node.capability = capability_for_ax_node(node, &index);
+        node.capability = capability_for_ax_node(node, index.as_ref(), &private_descendants);
     }
-    // A UA shadow part is not an authority. When the owning control is missing
-    // from the accessibility tree, one part is retargeted to that owner's node.
+    // Promote only when the DOM index proves the owner and the accessibility
+    // tree did not already expose that owner. The added node uses the owner's
+    // role, label, and value; the shadow part keeps its own identity.
+    let Some(index) = index.as_ref() else {
+        return;
+    };
     let mut promotions: Vec<(i64, usize, u8, ControlCapability)> = Vec::new();
     for (index_in_snapshot, node) in nodes.iter().enumerate() {
         let rank = shadow_owner_promotion_rank(&node.role);
@@ -1506,7 +1520,7 @@ fn apply_dom_capabilities(nodes: &mut [BackendNode], dom_root: Option<&Value>) {
             facts.host_input_type.as_deref(),
             "",
         );
-        if !host_capability.admits_any() {
+        if !host_capability.admits_any() || host_projection(facts, host_capability).is_none() {
             continue;
         }
         match promotions
@@ -1530,28 +1544,91 @@ fn apply_dom_capabilities(nodes: &mut [BackendNode], dom_root: Option<&Value>) {
             )),
         }
     }
-    for (host_backend_node_id, index_in_snapshot, _, host_capability) in promotions {
-        let Some(node) = nodes.get_mut(index_in_snapshot) else {
+    let mut additions = Vec::new();
+    for (_, index_in_snapshot, _, host_capability) in promotions {
+        let Some(node) = nodes.get(index_in_snapshot) else {
             continue;
         };
-        node.backend_node_id = Some(host_backend_node_id);
-        node.capability = host_capability;
+        let Some(backend_node_id) = node.backend_node_id else {
+            continue;
+        };
+        let Some(facts) = index.get(&backend_node_id) else {
+            continue;
+        };
+        let Some(projected) = host_projection(facts, host_capability) else {
+            continue;
+        };
+        additions.push((index_in_snapshot, projected));
+    }
+    additions.sort_by_key(|(index_in_snapshot, _)| *index_in_snapshot);
+    for (offset, (index_in_snapshot, projected)) in additions.into_iter().enumerate() {
+        nodes.insert(index_in_snapshot + offset, projected);
     }
 }
 
 fn capability_for_ax_node(
     node: &BackendNode,
-    index: &HashMap<i64, DomControlFacts>,
+    index: Option<&HashMap<i64, DomControlFacts>>,
+    private_descendants: &HashSet<i64>,
 ) -> ControlCapability {
     let Some(backend_node_id) = node.backend_node_id else {
         return ControlCapability::default();
     };
-    match index.get(&backend_node_id) {
-        Some(facts) if facts.in_native_control_shadow => ControlCapability::default(),
-        Some(facts) => {
-            capability_for_element(&facts.local_name, facts.input_type.as_deref(), &node.role)
-        }
-        None => legacy_role_capability(&node.role),
+    if let Some(index) = index {
+        return match index.get(&backend_node_id) {
+            Some(facts) if facts.in_native_control_shadow => ControlCapability::default(),
+            Some(facts) => {
+                capability_for_element(&facts.local_name, facts.input_type.as_deref(), &node.role)
+            }
+            // The document was classified, but this node was omitted. Do not
+            // guess a click target from its accessibility role.
+            None => ControlCapability::default(),
+        };
+    }
+    if private_descendants.contains(&backend_node_id) {
+        return ControlCapability::default();
+    }
+    legacy_role_capability(&node.role)
+}
+
+fn host_projection(facts: &DomControlFacts, capability: ControlCapability) -> Option<BackendNode> {
+    let role = host_role(
+        facts.host_local_name.as_deref().unwrap_or(""),
+        facts.host_input_type.as_deref(),
+    )?;
+    Some(BackendNode {
+        role: role.to_string(),
+        name: facts.host_label.clone(),
+        description: None,
+        value: facts.host_value.clone(),
+        group_key: None,
+        group_role: None,
+        group_label: None,
+        checked: None,
+        selected: None,
+        required: None,
+        disabled: None,
+        read_only: None,
+        backend_node_id: facts.host_backend_node_id,
+        capability,
+    })
+}
+
+fn host_role(local_name: &str, input_type: Option<&str>) -> Option<&'static str> {
+    match (local_name, input_type.unwrap_or("text")) {
+        ("select", _) => Some("combobox"),
+        ("textarea", _) => Some("textbox"),
+        ("input", "number") => Some("spinbutton"),
+        ("input", "range") => Some("slider"),
+        ("input", "date") => Some("Date"),
+        ("input", "time") => Some("InputTime"),
+        ("input", "color") => Some("ColorWell"),
+        ("input", "month" | "week" | "datetime-local") => Some("DateTime"),
+        ("input", "file" | "button" | "submit" | "reset" | "image") => Some("button"),
+        ("input", "checkbox") => Some("checkbox"),
+        ("input", "radio") => Some("radio"),
+        ("input", "text" | "email" | "tel" | "url" | "search" | "password") => Some("textbox"),
+        _ => None,
     }
 }
 
@@ -1590,6 +1667,54 @@ fn legacy_role_capability(role: &str) -> ControlCapability {
         | "DateTime" => ControlCapability::click(),
         _ => ControlCapability::default(),
     }
+}
+
+fn browser_private_control_descendants(raw_nodes: &[Value]) -> HashSet<i64> {
+    let by_id = raw_nodes
+        .iter()
+        .filter_map(|node| {
+            node.get("nodeId")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), node))
+        })
+        .collect::<HashMap<_, _>>();
+    raw_nodes
+        .iter()
+        .filter(|node| ax_descendant_of_browser_private_control(node, &by_id))
+        .filter_map(|node| node.get("backendDOMNodeId").and_then(Value::as_i64))
+        .collect()
+}
+
+fn ax_descendant_of_browser_private_control(node: &Value, by_id: &HashMap<String, &Value>) -> bool {
+    let mut parent_id = node.get("parentId").and_then(Value::as_str);
+    // No parent link is not evidence that this node is a browser-private part.
+    if parent_id.is_none() {
+        return false;
+    }
+    for _ in 0..32 {
+        let Some(id) = parent_id else {
+            return true;
+        };
+        let Some(parent) = by_id.get(id) else {
+            return true;
+        };
+        let role = ax_value(parent, "role").unwrap_or_default();
+        if is_browser_private_control_role(&role) {
+            return true;
+        }
+        if role == "RootWebArea" {
+            return false;
+        }
+        parent_id = parent.get("parentId").and_then(Value::as_str);
+    }
+    true
+}
+
+fn is_browser_private_control_role(role: &str) -> bool {
+    matches!(
+        role,
+        "Date" | "DateTime" | "InputTime" | "ColorWell" | "spinbutton" | "slider" | "combobox"
+    )
 }
 
 fn shadow_owner_promotion_rank(role: &str) -> u8 {
@@ -1657,6 +1782,8 @@ fn walk_dom_controls(
                 host_backend_node_id: host.and_then(|host| host.backend_node_id),
                 host_local_name: host.map(|host| host.local_name.clone()),
                 host_input_type: host.and_then(|host| host.input_type.clone()),
+                host_label: host.and_then(|host| host.label.clone()),
+                host_value: host.and_then(|host| host.value.clone()),
             },
         );
     }
@@ -1664,6 +1791,8 @@ fn walk_dom_controls(
         backend_node_id,
         local_name,
         input_type,
+        label: element_label(node),
+        value: element_value(node),
     };
     if let Some(children) = node.get("children").and_then(Value::as_array) {
         for child in children {
@@ -1678,17 +1807,36 @@ fn walk_dom_controls(
 }
 
 fn dom_attribute(node: &Value, name: &str) -> Option<String> {
+    dom_attribute_raw(node, name).map(|value| value.to_ascii_lowercase())
+}
+
+fn dom_attribute_raw(node: &Value, name: &str) -> Option<String> {
     let attributes = node.get("attributes")?.as_array()?;
     let mut index = 0;
     while index + 1 < attributes.len() {
         if attributes[index].as_str() == Some(name) {
             return attributes[index + 1]
                 .as_str()
-                .map(|value| value.trim().to_ascii_lowercase());
+                .map(|value| value.trim().to_string());
         }
         index += 2;
     }
     None
+}
+
+fn element_label(node: &Value) -> Option<String> {
+    for name in ["aria-label", "title"] {
+        if let Some(value) = dom_attribute_raw(node, name).filter(|value| !value.is_empty()) {
+            return Some(clip_bytes(&value, MAX_NODE_TEXT_BYTES));
+        }
+    }
+    None
+}
+
+fn element_value(node: &Value) -> Option<String> {
+    dom_attribute_raw(node, "value")
+        .filter(|value| !value.is_empty())
+        .map(|value| clip_bytes(&value, MAX_NODE_TEXT_BYTES))
 }
 
 fn ax_value(node: &Value, key: &str) -> Option<String> {
@@ -2248,10 +2396,20 @@ mod tests {
                         {"nodeType": 1, "localName": "div", "backendNodeId": 49, "attributes": ["id", "picker"]}
                     ])),
                     input(51, "month", json!([])),
-                    input(61, "week", json!([
-                        {"nodeType": 1, "localName": "span", "backendNodeId": 65},
-                        {"nodeType": 1, "localName": "span", "backendNodeId": 67}
-                    ])),
+                    json!({
+                        "nodeType": 1,
+                        "localName": "input",
+                        "backendNodeId": 61,
+                        "attributes": ["type", "week", "aria-label", "Week", "value", "2026-W12"],
+                        "shadowRoots": [{
+                            "nodeType": 11,
+                            "shadowRootType": "user-agent",
+                            "children": [
+                                {"nodeType": 1, "localName": "span", "backendNodeId": 65},
+                                {"nodeType": 1, "localName": "span", "backendNodeId": 67}
+                            ]
+                        }]
+                    }),
                     input(11, "time", json!([])),
                     input(80, "datetime-local", json!([])),
                     input(23, "color", json!([])),
@@ -2352,27 +2510,124 @@ mod tests {
         assert!(actions("shadow-spin").is_empty());
         assert_eq!(actions("button"), ["click"]);
         assert_eq!(actions("shadow-button"), ["click"]);
-        assert_eq!(actions("legacy-button"), ["click"]);
-        assert_eq!(actions("legacy-datetime"), ["click"]);
+        assert!(
+            actions("legacy-button").is_empty(),
+            "a node omitted from a successful DOM index does not regain click"
+        );
+        assert!(actions("legacy-datetime").is_empty());
         assert!(actions("detached-date").is_empty());
         assert!(actions("no-backend").is_empty());
         assert_eq!(by_name["no-backend"].backend_node_id, None);
 
-        let week_actions = nodes
+        let week_hosts = nodes
             .iter()
             .filter(|node| node.capability.exact_value && node.backend_node_id == Some(61))
-            .count();
-        assert_eq!(week_actions, 1, "one missing owner is retargeted once");
+            .collect::<Vec<_>>();
+        assert_eq!(week_hosts.len(), 1, "one missing owner is projected once");
+        assert_eq!(week_hosts[0].role, "DateTime");
+        assert_eq!(week_hosts[0].name.as_deref(), Some("Week"));
+        assert_eq!(week_hosts[0].value.as_deref(), Some("2026-W12"));
+        assert_eq!(week_hosts[0].capability.action_names(), ["set_value"]);
         assert!(nodes.iter().any(|node| {
             node.name.as_deref() == Some("week-part-a")
-                && node.backend_node_id == Some(61)
-                && node.capability.action_names() == ["set_value"]
+                && node.role == "spinbutton"
+                && node.backend_node_id == Some(65)
+                && node.capability.action_names().is_empty()
         }));
         assert!(nodes.iter().any(|node| {
             node.name.as_deref() == Some("week-part-b")
+                && node.role == "button"
                 && node.backend_node_id == Some(67)
                 && node.capability.action_names().is_empty()
         }));
+    }
+
+    #[test]
+    fn failed_dom_query_keeps_ordinary_controls_and_drops_shadow_pickers() {
+        let raw_nodes = vec![
+            ax_child("root", "RootWebArea", Some(1), None),
+            ax_child("Continue", "button", Some(2), Some("ax-root")),
+            ax_child("Name", "textbox", Some(3), Some("ax-root")),
+            ax_child("When", "Date", Some(10), Some("ax-root")),
+            ax_child("picker", "button", Some(11), Some("ax-When")),
+            ax_child("year", "spinbutton", Some(12), Some("ax-When")),
+            ax_child("Author shadow", "button", Some(20), Some("ax-root")),
+            ax_child("Month", "DateTime", Some(30), Some("ax-root")),
+        ];
+        let (nodes, _) = project_ax_nodes(&raw_nodes, None);
+        let by_name = nodes
+            .iter()
+            .filter_map(|node| node.name.as_deref().map(|name| (name, node)))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(by_name["Continue"].capability.action_names(), ["click"]);
+        assert_eq!(
+            by_name["Name"].capability.action_names(),
+            ["click", "input_text"]
+        );
+        assert_eq!(
+            by_name["Author shadow"].capability.action_names(),
+            ["click"]
+        );
+        assert!(by_name["picker"].capability.action_names().is_empty());
+        assert_eq!(by_name["picker"].backend_node_id, Some(11));
+        assert!(by_name["year"].capability.action_names().is_empty());
+        assert!(by_name["When"].capability.action_names().is_empty());
+        assert_eq!(by_name["Month"].capability.action_names(), ["click"]);
+    }
+
+    #[test]
+    fn depth_truncated_shadow_tree_does_not_click_the_picker() {
+        let dom = json!({
+            "nodeType": 9,
+            "children": [{
+                "nodeType": 1,
+                "localName": "body",
+                "backendNodeId": 1,
+                "children": [
+                    json!({
+                        "nodeType": 1,
+                        "localName": "input",
+                        "backendNodeId": 40,
+                        "attributes": ["type", "date", "aria-label", "When"]
+                    }),
+                    {"nodeType": 1, "localName": "button", "backendNodeId": 200},
+                    {
+                        "nodeType": 1,
+                        "localName": "ua-like",
+                        "backendNodeId": 201,
+                        "shadowRoots": [{
+                            "nodeType": 11,
+                            "shadowRootType": "open",
+                            "children": [
+                                {"nodeType": 1, "localName": "button", "backendNodeId": 124}
+                            ]
+                        }]
+                    }
+                ]
+            }]
+        });
+        let raw_nodes = vec![
+            ax_child("root", "RootWebArea", Some(1), None),
+            ax_child("When", "Date", Some(40), Some("ax-root")),
+            ax_child("picker", "button", Some(49), Some("ax-When")),
+            ax_child("Continue", "button", Some(200), Some("ax-root")),
+            ax_child("Author shadow", "button", Some(124), Some("ax-root")),
+        ];
+        let (nodes, _) = project_ax_nodes(&raw_nodes, Some(&dom));
+        let by_name = nodes
+            .iter()
+            .filter_map(|node| node.name.as_deref().map(|name| (name, node)))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(by_name["When"].capability.action_names(), ["set_value"]);
+        assert_eq!(by_name["When"].backend_node_id, Some(40));
+        assert!(by_name["picker"].capability.action_names().is_empty());
+        assert_eq!(by_name["picker"].role, "button");
+        assert_eq!(by_name["picker"].backend_node_id, Some(49));
+        assert_eq!(by_name["Continue"].capability.action_names(), ["click"]);
+        assert_eq!(
+            by_name["Author shadow"].capability.action_names(),
+            ["click"]
+        );
     }
 
     fn input(backend_node_id: i64, input_type: &str, shadow_children: Value) -> Value {
@@ -2396,6 +2651,15 @@ mod tests {
     }
 
     fn ax(name: &str, role: &str, backend_node_id: Option<i64>) -> Value {
+        ax_child(name, role, backend_node_id, None)
+    }
+
+    fn ax_child(
+        name: &str,
+        role: &str,
+        backend_node_id: Option<i64>,
+        parent_id: Option<&str>,
+    ) -> Value {
         let mut node = json!({
             "nodeId": format!("ax-{name}"),
             "role": {"value": role},
@@ -2403,6 +2667,9 @@ mod tests {
         });
         if let Some(backend_node_id) = backend_node_id {
             node["backendDOMNodeId"] = json!(backend_node_id);
+        }
+        if let Some(parent_id) = parent_id {
+            node["parentId"] = json!(parent_id);
         }
         node
     }

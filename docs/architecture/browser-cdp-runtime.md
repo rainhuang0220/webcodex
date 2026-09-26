@@ -103,14 +103,34 @@ select the effect: native `select` admits `select_option`; text-like inputs and
 inputs, and `color` admit `set_value`; `file` admits `upload_file`. Native
 `option` nodes remain observable choices and admit no effect. Accessibility
 `spinbutton` and `slider` nodes are not generically actionable. Descendants
-inside an `input`, `select`, or `textarea` shadow tree admit nothing; the owning
-control carries the structured action. If that owner is absent from the
-accessibility tree, one descendant is retargeted to the owner's backend node.
-When DOM classification is unavailable, previous light-DOM role admission remains
-and no new structured authority is added. `click`, `input_text`, `select_option`,
-`set_value`, and `upload_file` reject an element that does not list that action.
-Document loader identity, snapshot generation, and stale-element rejection are
-unchanged.
+inside an `input`, `select`, or `textarea` shadow tree admit nothing.
+
+This is an intentional compatibility change from role-wide actionability. A
+native `select` no longer accepts `click` or `input_text`. A file input no
+longer accepts `click`. `number`, `range`, `date`, `month`, `week`, `time`,
+`datetime-local`, and `color` no longer accept `click` or `input_text`. Call
+only the action listed on the current snapshot node. Light-DOM buttons, links,
+checkboxes, radios, and text fields keep their previous actions when the DOM
+index contains them. An author button inside a custom element's shadow root
+also keeps `click` when that button is in the index.
+
+If the owning control is absent from the accessibility tree, one extra snapshot
+node is added for that owner. It uses the owner's role, accessible label, and
+DOM value, and its element id addresses the owner. The shadow part keeps its
+own role, name, and backend node, and admits no effect.
+
+A successful DOM index that omits a node grants that node nothing. Depth
+truncation therefore cannot turn a browser-private shadow picker into a click
+target. When `DOM.getDocument` fails, legacy role admission remains only for
+nodes that are not accessibility descendants of `Date`, `DateTime`,
+`InputTime`, `ColorWell`, `spinbutton`, `slider`, or `combobox`. Those
+descendants admit nothing, so a shadow picker does not regain `click`. A
+top-level `DateTime` host may still admit `click` in that failure mode because
+its input type is unknown. Iframe documents are not classified; controls inside
+them do not receive element authority. `click`, `input_text`, `select_option`,
+`set_value`, and `upload_file` reject an element that does not list that
+action. Document loader identity, snapshot generation, and stale-element
+rejection are unchanged.
 
 Element authority is fenced to Browser identity, page identity, current document
 (loader) identity, and snapshot generation. Navigation, document replacement, page
