@@ -626,7 +626,7 @@ fn read_and_list_reissue_the_live_attempt_ref_for_heartbeat_and_completion() {
     let terminal_ref = terminal["attempt_ref"].as_str().unwrap().to_string();
     let by_ref = runtime.complete_agent_task_attempt_with_selector(
         Some(&alice),
-        Some(terminal_ref),
+        Some(terminal_ref.clone()),
         None,
         None,
         None,
@@ -640,6 +640,23 @@ fn read_and_list_reissue_the_live_attempt_ref_for_heartbeat_and_completion() {
     assert!(by_ref.success, "{:?}", by_ref.output);
     assert_eq!(by_ref.output["attempt"]["state"], "succeeded");
     assert!(by_ref.output.get("attempt_fence").is_none());
+    let replay_by_ref = runtime.complete_agent_task_attempt_with_selector(
+        Some(&alice),
+        Some(terminal_ref),
+        None,
+        None,
+        None,
+        None,
+        None,
+        "succeeded".to_string(),
+        None,
+        None,
+        "complete-by-ref".to_string(),
+    );
+    assert!(replay_by_ref.success, "{:?}", replay_by_ref.output);
+    assert_eq!(replay_by_ref.output["replayed"], true);
+    assert_eq!(replay_by_ref.output["state_changed"], false);
+    assert_eq!(replay_by_ref.output["attempt"]["state"], "succeeded");
     let other_task = create_task(&runtime, Some(&alice), &assignee, "complete-tuple");
     let other = start_attempt(
         &runtime,

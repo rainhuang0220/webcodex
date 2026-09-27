@@ -207,7 +207,7 @@ pub fn output_schema_for_tool(name: &str) -> Option<Value> {
         "start_agent_task_attempt" => wrapped_output_schema(vec![
             ("task", task_summary_schema()),
             ("attempt", attempt_schema()),
-            ("attempt_fence", schema_type("string", "Opaque exact-Attempt freshness fence required for heartbeat/completion. It is returned only by exact start/replay, not generic list/read.")),
+            ("attempt_fence", schema_type("string", "Opaque exact-Attempt freshness fence used by the explicit-tuple heartbeat/completion path and required by coding-run admission. Heartbeat/completion may instead use attempt_ref. The fence is returned only by exact start/replay, not generic list/read.")),
             ("attempt_ref", schema_type("string", "Server-issued ~ta selector pinned to this exact Attempt fence and controller generation. Not a credential. Heartbeat and completion accept this ref or the explicit tuple. Coding-run still uses the explicit tuple.")),
             ("replayed", schema_type("boolean", "True for exact keyed Attempt-start replay.")),
             ("state_changed", schema_type("boolean", "Whether this call first created the Attempt.")),
