@@ -30,6 +30,7 @@ fn canonical_execution_project_binding(
     match call {
         ToolCall::GitDiffHunks { project, .. }
         | ToolCall::GitReviewSummary { project, .. }
+        | ToolCall::ReviewChanges { project, .. }
         | ToolCall::ShowChanges { project, .. }
         | ToolCall::WorkspaceHygieneCheck { project, .. } => {
             Some((project, CanonicalProjectOutput::Requested))
@@ -3293,8 +3294,9 @@ impl ToolRuntime {
             | ToolCall::GitStatus { .. }
             | ToolCall::GitDiffHunks { .. }
             | ToolCall::GitReviewSummary { .. }
+            | ToolCall::ReviewChanges { .. }
             | ToolCall::GitLog { .. }
-            | ToolCall::ShowChanges { .. }) => self.dispatch_git_tool(call).await,
+            | ToolCall::ShowChanges { .. }) => self.dispatch_git_tool(call, auth).await,
 
             call @ (ToolCall::CargoFmt { .. }
             | ToolCall::CargoCheck { .. }
