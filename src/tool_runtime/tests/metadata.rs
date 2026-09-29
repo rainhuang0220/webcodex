@@ -2475,6 +2475,7 @@ async fn runtime_status_with_no_projects_returns_configured_false() {
     assert_eq!(session_store["cold_sessions"], 0);
     assert_eq!(session_store["historical_session_retention_limit"], 100);
     assert_eq!(session_store["capacity_evictions"], 0);
+    assert_eq!(session_store["retention_tombstones"], 0);
 
     assert_eq!(out["projects"]["mode"], "runner_registered");
     assert_eq!(out["projects"]["count"], 0);

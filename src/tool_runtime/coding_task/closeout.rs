@@ -46,7 +46,9 @@ impl ToolRuntime {
             .summary(&session_id, Some(FINISH_SESSION_EVENT_LIMIT))
         {
             Some(summary) => summary,
-            None => return unknown_session_result(&session_id),
+            None => {
+                return absent_workflow_session_result(&self.sessions, &session_id, auth);
+            }
         };
         let session_project = session_summary
             .project

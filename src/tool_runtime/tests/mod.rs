@@ -61,6 +61,7 @@ mod script;
 mod search_and_read;
 mod search_project_texts;
 mod session_discovery;
+mod session_retention;
 mod session_shells;
 mod sessions;
 mod sessions_git;

@@ -1604,8 +1604,12 @@ fn canonicalize_recording_session_id(
     raw: Option<String>,
     auth: Option<&crate::auth::AuthContext>,
 ) -> Result<Option<String>, String> {
-    raw.map(|raw| runtime.canonicalize_explicit_session_selector(&raw, auth))
-        .transpose()
+    raw.map(|raw| {
+        runtime
+            .canonicalize_explicit_session_selector(&raw, auth)
+            .map_err(|err| err.to_string())
+    })
+    .transpose()
 }
 
 pub(super) fn strip_stateless_ack_session_message_ids(

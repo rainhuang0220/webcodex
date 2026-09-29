@@ -8,7 +8,7 @@ use crate::json_digest::update_sha256_with_json;
 
 use super::handoff::review_evidence_summary_for_session;
 use super::session_context::{
-    session_project_mismatch_result, unknown_session_result, SessionProjectMismatch,
+    absent_workflow_session_result, session_project_mismatch_result, SessionProjectMismatch,
 };
 use super::validation_events::{
     current_validation_evidence_for_session, validation_summary_from_events,
@@ -234,7 +234,11 @@ impl ToolRuntime {
             .sessions
             .summary(session_id, Some(WORK_RESULT_SESSION_EVENT_LIMIT))
         else {
-            return Err(unknown_session_result(session_id));
+            return Err(absent_workflow_session_result(
+                &self.sessions,
+                session_id,
+                auth,
+            ));
         };
         if summary.project.as_deref() != Some(resolved_project.as_str()) {
             let mismatch = SessionProjectMismatch {

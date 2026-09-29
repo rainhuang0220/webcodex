@@ -182,6 +182,7 @@ pub(crate) use webcodex_tool_runtime_contracts::tool_result::{
     RECOVERY_KIND_VALUES,
 };
 
+pub(crate) use model_references::SessionSelectorError;
 #[cfg(test)]
 pub(crate) use project_resolution::ProjectResolverErrorKind;
 pub(crate) use project_resolution::{runner_project_runtime_id, ProjectResolverError};
