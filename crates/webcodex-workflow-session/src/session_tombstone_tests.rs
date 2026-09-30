@@ -51,11 +51,15 @@ fn canonical_id(n: u8) -> String {
 }
 
 fn tombstone_row(session_id: &str, ordinal: u64) -> Value {
+    tombstone_row_with(session_id, ordinal, &"b".repeat(64))
+}
+
+fn tombstone_row_with(session_id: &str, ordinal: u64, incarnation: &str) -> Value {
     json!({
         "retention_tombstone": {
             "session_id": session_id,
             "owner_authority_fingerprint": TEST_ONLY_PROJECT_SESSION_AUTHORITY_FINGERPRINT,
-            "incarnation_fingerprint": "b".repeat(64),
+            "incarnation_fingerprint": incarnation,
             "expiry_ordinal": ordinal
         }
     })
@@ -476,39 +480,139 @@ fn duplicate_ordinals_fail_closed_and_the_next_ordinal_stays_above_them() {
 }
 
 #[test]
-fn ordinal_at_u64_max_does_not_wrap() {
+fn restored_max_ordinal_compacts_in_order_and_still_allocates() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sessions.json");
-    let occupied = canonical_id(1);
+    let oldest = canonical_id(1);
+    let newer = canonical_id(2);
+    let oldest_incarnation = "a".repeat(64);
+    let newer_incarnation = "c".repeat(64);
     write_ledger(
         &path,
         &json!({
             "version": 2,
-            "sessions": [tombstone_row(&occupied, u64::MAX)]
+            "sessions": [
+                tombstone_row_with(&oldest, 10, &oldest_incarnation),
+                tombstone_row_with(&newer, u64::MAX, &newer_incarnation),
+            ]
+        }),
+    );
+    let store = SessionStore::with_persistence_limits(&path, 10, 2, 10);
+    let restored_oldest = store.retention_tombstone_for_test(&oldest).unwrap();
+    let restored_newer = store.retention_tombstone_for_test(&newer).unwrap();
+    assert_eq!(restored_oldest.expiry_ordinal, 10);
+    assert_eq!(restored_newer.expiry_ordinal, u64::MAX);
+    assert_eq!(restored_oldest.incarnation_fingerprint, oldest_incarnation);
+    assert_eq!(
+        restored_newer.owner_authority_fingerprint,
+        restored_oldest.owner_authority_fingerprint
+    );
+
+    // Limit 2 keeps the first two Closed rows. The third close removes the
+    // oldest Closed row and must still be able to mint its tombstone.
+    let removed = close_new(&store, "removed");
+    let oldest_closed = close_new(&store, "oldest closed");
+    let _newer_closed = close_new(&store, "newer closed");
+    assert!(store.retention_tombstone_for_test(&oldest).is_none());
+    assert!(store.contains_session(&oldest_closed));
+    let kept = store.retention_tombstone_for_test(&newer).unwrap();
+    let fresh = store.retention_tombstone_for_test(&removed).unwrap();
+    assert_eq!(kept.incarnation_fingerprint, newer_incarnation);
+    assert_eq!(
+        kept.owner_authority_fingerprint,
+        restored_newer.owner_authority_fingerprint
+    );
+    assert_eq!(kept.session_id, newer);
+    assert_eq!(fresh.session_id, removed);
+    assert!(kept.expiry_ordinal < fresh.expiry_ordinal);
+    assert_ne!(fresh.expiry_ordinal, 0);
+    assert!(fresh.expiry_ordinal < u64::MAX);
+    assert_eq!(store.status().retention_tombstones, 2);
+    assert_eq!(store.status().capacity_evictions, 1);
+    store.flush_persistence();
+    let ledger = read_ledger(&path);
+    assert_eq!(ledger["version"], 2);
+    assert!(ledger.get("retention_tombstones").is_none());
+
+    let reloaded = SessionStore::with_persistence_limits(&path, 10, 2, 10);
+    assert_eq!(
+        reloaded
+            .retention_tombstone_for_test(&newer)
+            .unwrap()
+            .expiry_ordinal,
+        kept.expiry_ordinal
+    );
+    assert_eq!(
+        reloaded
+            .retention_tombstone_for_test(&removed)
+            .unwrap()
+            .incarnation_fingerprint,
+        fresh.incarnation_fingerprint
+    );
+    let _trigger = close_new(&reloaded, "trigger");
+    assert!(reloaded.retention_tombstone_for_test(&newer).is_none());
+    let survived = reloaded.retention_tombstone_for_test(&removed).unwrap();
+    let successor = reloaded
+        .retention_tombstone_for_test(&oldest_closed)
+        .unwrap();
+    assert_eq!(survived.expiry_ordinal, fresh.expiry_ordinal);
+    assert_eq!(
+        survived.incarnation_fingerprint,
+        fresh.incarnation_fingerprint
+    );
+    assert!(survived.expiry_ordinal < successor.expiry_ordinal);
+    assert_eq!(reloaded.status().retention_tombstones, 2);
+}
+
+#[test]
+fn restored_near_max_ordinal_allocates_once_then_compacts_without_inversion() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sessions.json");
+    let oldest = canonical_id(3);
+    let oldest_incarnation = "d".repeat(64);
+    write_ledger(
+        &path,
+        &json!({
+            "version": 2,
+            "sessions": [tombstone_row_with(&oldest, u64::MAX - 1, &oldest_incarnation)]
         }),
     );
     let store = SessionStore::with_persistence_limits(&path, 10, 2, 10);
     assert_eq!(
         store
-            .retention_tombstone_for_test(&occupied)
+            .retention_tombstone_for_test(&oldest)
             .unwrap()
             .expiry_ordinal,
-        u64::MAX
+        u64::MAX - 1
     );
-    let pruned_a = close_new(&store, "a");
-    let pruned_b = close_new(&store, "b");
-    let _kept_c = close_new(&store, "c");
-    let _kept_d = close_new(&store, "d");
-    assert!(store.retention_tombstone_for_test(&pruned_a).is_none());
-    assert!(store.retention_tombstone_for_test(&pruned_b).is_none());
+
+    let first_evicted = close_new(&store, "first evicted");
+    let second_evicted = close_new(&store, "second evicted");
+    let _retained = close_new(&store, "retained");
+    let first = store.retention_tombstone_for_test(&first_evicted).unwrap();
     assert_eq!(
         store
-            .retention_tombstone_for_test(&occupied)
+            .retention_tombstone_for_test(&oldest)
             .unwrap()
             .expiry_ordinal,
-        u64::MAX
+        u64::MAX - 1
     );
-    assert_eq!(store.status().retention_tombstones, 1);
+    assert_eq!(first.expiry_ordinal, u64::MAX);
+    assert_eq!(store.status().retention_tombstones, 2);
+
+    let _another_retained = close_new(&store, "another retained");
+    assert!(store.retention_tombstone_for_test(&oldest).is_none());
+    let first_after = store.retention_tombstone_for_test(&first_evicted).unwrap();
+    let second = store.retention_tombstone_for_test(&second_evicted).unwrap();
+    assert_eq!(
+        first_after.incarnation_fingerprint,
+        first.incarnation_fingerprint
+    );
+    assert_eq!(first_after.session_id, first_evicted);
+    assert!(first_after.expiry_ordinal < second.expiry_ordinal);
+    assert!(second.expiry_ordinal < u64::MAX);
+    assert_ne!(first_after.expiry_ordinal, 0);
+    assert_eq!(store.status().retention_tombstones, 2);
     assert_eq!(store.status().capacity_evictions, 2);
 }
 

@@ -3653,11 +3653,58 @@ impl SessionStoreInner {
         Some(tombstone.incarnation_fingerprint.clone())
     }
 
+    /// `expiry_ordinal` is relative order. A restored `u64::MAX` must not
+    /// permanently stop later tombstones, and it must not wrap.
+    fn needs_ordinal_compaction(&self) -> bool {
+        if self.expiry_ordinal_exhausted {
+            return true;
+        }
+        self.tombstones
+            .keys()
+            .next_back()
+            .is_some_and(|max| self.next_expiry_ordinal <= *max)
+    }
+
+    fn compact_expiry_ordinals(&mut self) {
+        let ordered: Vec<SessionRetentionTombstone> = self.tombstones.values().cloned().collect();
+        let Some(count) = u64::try_from(ordered.len())
+            .ok()
+            .filter(|count| *count < u64::MAX)
+        else {
+            self.next_expiry_ordinal = u64::MAX;
+            self.expiry_ordinal_exhausted = true;
+            return;
+        };
+        self.tombstones.clear();
+        self.tombstone_ids.clear();
+        for (index, mut tombstone) in ordered.into_iter().enumerate() {
+            let ordinal = u64::try_from(index).expect("compacted tombstone index fits in u64") + 1;
+            tombstone.expiry_ordinal = ordinal;
+            self.tombstone_ids
+                .insert(tombstone.session_id.clone(), ordinal);
+            self.tombstones.insert(ordinal, tombstone);
+        }
+        self.next_expiry_ordinal = count + 1;
+        self.expiry_ordinal_exhausted = false;
+    }
+
     fn allocate_expiry_ordinal(&mut self) -> Option<u64> {
+        if self.needs_ordinal_compaction() {
+            self.compact_expiry_ordinals();
+        }
         if self.expiry_ordinal_exhausted {
             return None;
         }
         let ordinal = self.next_expiry_ordinal;
+        if self
+            .tombstones
+            .keys()
+            .next_back()
+            .is_some_and(|max| ordinal <= *max)
+        {
+            self.expiry_ordinal_exhausted = true;
+            return None;
+        }
         match ordinal.checked_add(1) {
             Some(next) => self.next_expiry_ordinal = next,
             None => self.expiry_ordinal_exhausted = true,

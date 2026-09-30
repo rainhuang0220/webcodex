@@ -505,6 +505,52 @@ async fn explicit_resume_of_an_expired_id_does_not_create_a_session() {
 }
 
 #[tokio::test]
+async fn owner_expired_session_ref_on_the_work_on_project_kernel_does_not_create_a_session() {
+    let fixture = fixture(1);
+    let runtime = &fixture.runtime;
+    let expired = start(runtime, None, "expired ref");
+    let session_ref = runtime
+        .session_reference_for_id(&expired, None)
+        .expect("live session issues a ref before retention");
+    assert!(session_ref.starts_with("~s"), "{session_ref}");
+    close(runtime, &expired);
+    let retained = start(runtime, None, "retained");
+    close(runtime, &retained);
+    assert!(runtime
+        .sessions
+        .retention_tombstone_for_test(&expired)
+        .is_some());
+    let before = runtime.sessions.status();
+
+    let outcome = runtime
+        .call_tool_with_context(
+            ToolCallRequest {
+                tool_name: "work_on_project".to_string(),
+                arguments: json!({
+                    "project": "agent:test:retention",
+                    "instruction": "resume the expired session by ref",
+                    "session_id": session_ref,
+                }),
+            },
+            context(None, None),
+        )
+        .await;
+
+    assert_retention_expired(&outcome, &expired);
+    let after = runtime.sessions.status();
+    assert_eq!(after.active_sessions, before.active_sessions);
+    assert_eq!(after.retained_sessions, before.retained_sessions);
+    assert_eq!(after.closed_sessions, before.closed_sessions);
+    assert_eq!(after.retention_tombstones, before.retention_tombstones);
+    assert_eq!(after.capacity_evictions, before.capacity_evictions);
+    assert!(!runtime.sessions.contains_session(&expired));
+    assert_eq!(
+        runtime.sessions.lifecycle_state(&retained),
+        Some(SessionLifecycle::Closed)
+    );
+}
+
+#[tokio::test]
 async fn omitted_session_id_still_creates_a_fresh_session() {
     let root = tempfile::tempdir().unwrap();
     init_git_repo(root.path());

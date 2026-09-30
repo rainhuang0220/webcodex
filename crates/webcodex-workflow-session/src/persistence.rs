@@ -540,7 +540,9 @@ fn parse_retention_tombstone_row(value: &Value) -> Option<SessionRetentionTombst
 /// greater ordinal, and an equal ordinal keeps the first row. A live Session
 /// id drops its tombstone. `next_expiry_ordinal` is strictly above every valid
 /// restored ordinal, including ordinals discarded by those rules. `u64::MAX`
-/// leaves allocation exhausted so ordering cannot wrap.
+/// marks allocation exhausted here without renumbering, so restore does not
+/// rewrite the ledger. The next allocation compacts retained ordinals instead
+/// of wrapping.
 fn accept_restored_tombstones(
     rows: Vec<SessionRetentionTombstone>,
     live_ids: &HashSet<String>,
