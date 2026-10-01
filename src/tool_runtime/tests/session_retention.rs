@@ -24,6 +24,7 @@ use super::super::{
 use super::reconnect::dispatch_coding_call_in_window;
 use super::support::{auth_context, init_git_repo, register_runner_project_at_path};
 use crate::auth::{AuthContext, AuthKind};
+use webcodex_tool_contracts::SessionLifecycleInput;
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -731,5 +732,212 @@ async fn restored_ledger_keeps_the_owner_lookup_distinct_from_unknown() {
     assert_unknown_session(
         &call_summary(&runtime, never_issued, None, None).await,
         never_issued,
+    );
+}
+
+#[tokio::test]
+async fn owner_expired_canonical_id_on_the_work_on_project_kernel_does_not_create_a_session() {
+    let fixture = fixture(1);
+    let runtime = &fixture.runtime;
+    let project =
+        register_runner_project_at_path(runtime, "retention-kernel", "demo", fixture._tmp.path())
+            .await;
+    let auth = auth_context(None, true);
+    let owner = workflow_session_authority_fingerprint(Some(&auth)).unwrap();
+    let expired = runtime
+        .sessions
+        .start_session_with_options(
+            SessionCreateOptions::new(
+                Some(project.clone()),
+                Some("expired canonical".to_string()),
+                SessionMode::Normal,
+                SessionGuards::default(),
+            )
+            .with_owner_authority_fingerprint(Some(owner.clone())),
+        )
+        .unwrap()
+        .session_id;
+    close(runtime, &expired);
+    let retained = runtime
+        .sessions
+        .start_session_with_options(
+            SessionCreateOptions::new(
+                Some(project.clone()),
+                Some("retained canonical".to_string()),
+                SessionMode::Normal,
+                SessionGuards::default(),
+            )
+            .with_owner_authority_fingerprint(Some(owner)),
+        )
+        .unwrap()
+        .session_id;
+    close(runtime, &retained);
+    assert!(runtime
+        .sessions
+        .retention_tombstone_for_test(&expired)
+        .is_some());
+    let before = runtime.sessions.status();
+
+    let outcome = runtime
+        .call_tool_with_context(
+            ToolCallRequest {
+                tool_name: "work_on_project".to_string(),
+                arguments: json!({
+                    "project": project,
+                    "instruction": "resume the expired session by canonical id",
+                    "session_id": expired,
+                }),
+            },
+            context(Some(&auth), None),
+        )
+        .await;
+
+    assert_retention_expired(&outcome, &expired);
+    let after = runtime.sessions.status();
+    assert_eq!(after.active_sessions, before.active_sessions);
+    assert_eq!(after.retained_sessions, before.retained_sessions);
+    assert_eq!(after.closed_sessions, before.closed_sessions);
+    assert_eq!(after.retention_tombstones, before.retention_tombstones);
+    assert!(!runtime.sessions.contains_session(&expired));
+    assert_eq!(
+        runtime.sessions.lifecycle_state(&retained),
+        Some(SessionLifecycle::Closed)
+    );
+}
+
+#[tokio::test]
+async fn list_sessions_omits_tombstones_while_exact_lookup_stays_expired() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = ToolRuntime::new_for_tests().with_project_reference_database(Arc::new(
+        crate::Database::open(&root.path().join("refs.db")).unwrap(),
+    ));
+    runtime.sessions = SessionStore::new_in_memory_with_limits(8, 1, 64);
+    let project =
+        register_runner_project_at_path(&runtime, "retention-list", "demo", root.path()).await;
+    let auth = auth_context(None, true);
+    let foreign = api_user("foreign-list");
+
+    let expired = runtime
+        .sessions
+        .start_session_with_options(
+            SessionCreateOptions::new(
+                Some(project.clone()),
+                Some("expired list".to_string()),
+                SessionMode::Normal,
+                SessionGuards::default(),
+            )
+            .with_owner_authority_fingerprint(Some(
+                workflow_session_authority_fingerprint(Some(&auth)).unwrap(),
+            )),
+        )
+        .unwrap()
+        .session_id;
+    let expired_ref = runtime
+        .session_reference_for_id(&expired, Some(&auth))
+        .expect("live session issues a ref");
+    close(&runtime, &expired);
+    let closed = runtime
+        .sessions
+        .start_session_with_options(
+            SessionCreateOptions::new(
+                Some(project.clone()),
+                Some("retained closed".to_string()),
+                SessionMode::Normal,
+                SessionGuards::default(),
+            )
+            .with_owner_authority_fingerprint(Some(
+                workflow_session_authority_fingerprint(Some(&auth)).unwrap(),
+            )),
+        )
+        .unwrap()
+        .session_id;
+    close(&runtime, &closed);
+    let active = runtime
+        .sessions
+        .start_session_with_options(
+            SessionCreateOptions::new(
+                Some(project.clone()),
+                Some("retained active".to_string()),
+                SessionMode::Normal,
+                SessionGuards::default(),
+            )
+            .with_owner_authority_fingerprint(Some(
+                workflow_session_authority_fingerprint(Some(&auth)).unwrap(),
+            )),
+        )
+        .unwrap()
+        .session_id;
+    assert!(runtime
+        .sessions
+        .retention_tombstone_for_test(&expired)
+        .is_some());
+
+    let listed = runtime
+        .dispatch_with_auth(
+            ToolCall::ListSessions {
+                project: project.clone(),
+                lifecycle: None,
+                offset: None,
+                limit: None,
+            },
+            Some(&auth),
+        )
+        .await;
+    assert!(listed.success, "{:?}", listed.error);
+    assert_eq!(listed.output["total"], 2);
+    let ids = listed.output["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["session_id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&closed));
+    assert!(ids.contains(&active));
+    assert!(!ids.contains(&expired));
+    let encoded = listed.output.to_string();
+    assert!(!encoded.contains(&expired));
+    assert!(!encoded.contains(&expired_ref));
+    assert!(encoded.contains("session_ref"));
+
+    for (lifecycle, expected) in [
+        (SessionLifecycleInput::Closed, &closed),
+        (SessionLifecycleInput::Active, &active),
+    ] {
+        let page = runtime
+            .dispatch_with_auth(
+                ToolCall::ListSessions {
+                    project: project.clone(),
+                    lifecycle: Some(lifecycle),
+                    offset: None,
+                    limit: None,
+                },
+                Some(&auth),
+            )
+            .await;
+        assert!(page.success, "{:?}", page.error);
+        assert_eq!(page.output["total"], 1);
+        assert_eq!(page.output["sessions"][0]["session_id"], *expected);
+        assert!(!page.output.to_string().contains(&expired));
+    }
+
+    assert_retention_expired(
+        &call_summary(&runtime, &expired, Some(&auth), None).await,
+        &expired,
+    );
+    assert_retention_expired(
+        &call_summary(&runtime, &expired_ref, Some(&auth), None).await,
+        &expired,
+    );
+    let foreign_lookup = call_summary(&runtime, &expired, Some(&foreign), None).await;
+    let foreign_missing = call_summary(
+        &runtime,
+        "wc_sess_0123456789abcdef0123456789abcdef",
+        Some(&foreign),
+        None,
+    )
+    .await;
+    assert_eq!(
+        unknown_shape(result_of(&foreign_lookup)),
+        unknown_shape(result_of(&foreign_missing))
     );
 }

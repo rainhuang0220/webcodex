@@ -700,7 +700,11 @@ normalized to 1–20; titles are redacted and capped at 240 Unicode characters a
 the JSON output at 32 KiB. Offset pagination is not a frozen snapshot. Short refs
 remain principal-scoped selectors. The caller must explicitly choose a returned
 identity; discovery never starts, resumes, or selects recent work. Closed history
-can be read, while mutation still requires an Active Session.
+can be read, while mutation still requires an Active Session. A retention
+tombstone is not a retained Session: `list_sessions` omits it from rows and
+totals, does not mint a `session_ref` for it, and has no expired lifecycle
+filter. Exact expired identity is visible only to a later lookup that already
+holds that canonical id or the matching principal-scoped ref.
 
 Built-in workflow guidance instructs models to save agreed decisions and current
 progress/remaining work through explicit `post_session_message` calls at recovery
