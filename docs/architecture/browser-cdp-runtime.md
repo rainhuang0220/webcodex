@@ -153,6 +153,15 @@ checkboxes, radios, and text fields keep their previous actions when the DOM
 index contains them. An author button inside a custom element's shadow root
 also keeps `click` when that button is in the index.
 
+Accessibility `disabled: true` removes every effect and the element id. The
+node stays in an interactive snapshot so the control remains visible.
+`disabled: false` and a missing `disabled` property keep the ordinary actions.
+`readonly: true` removes `input_text` and `set_value` and keeps `click` when
+the control already admitted it. A missing `readonly` property removes nothing.
+A promoted owner that the accessibility tree omitted copies a present HTML
+`disabled` or `readonly` attribute; absence of the attribute is not treated as
+either state.
+
 If the owning control is absent from the accessibility tree, one extra snapshot
 node is added for that owner. It uses the owner's role, accessible label, and
 DOM value, and its element id addresses the owner. The shadow part keeps its
@@ -171,7 +180,7 @@ classification; they do not fall back to role-only authority when that read fail
 element that does not list that action.
 
 Same-origin iframe documents are classified separately using the same DOM and AX
-rules. Admission requires a matching HTTP(S) security origin throughout the frame
+rules, including the disabled and read-only admission above. Admission requires a matching HTTP(S) security origin throughout the frame
 ancestry, a known frame/loader identity, and an available DOM content document.
 Cross-origin, opaque-origin, sandboxed-without-allow-same-origin, missing and
 out-of-process documents receive no iframe element authority. There is no remote
