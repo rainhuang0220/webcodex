@@ -1809,6 +1809,12 @@ fn capability_for_ax_node(
     if private_descendants.contains(&backend_node_id) {
         return ControlCapability::default();
     }
+    // Month, week, and datetime-local share this role. Without the owning
+    // input type, role-only admission cannot choose set_value and must not
+    // invent click. The host is not one of its own private descendants.
+    if node.role == "DateTime" {
+        return ControlCapability::default();
+    }
     legacy_role_capability(&node.role)
 }
 
@@ -2840,6 +2846,7 @@ mod tests {
             ax_child("picker", "button", Some(11), Some("ax-When")),
             ax_child("year", "spinbutton", Some(12), Some("ax-When")),
             ax_child("Author shadow", "button", Some(20), Some("ax-root")),
+            ax_child("Choose", "combobox", Some(40), Some("ax-root")),
             ax_child("Month", "DateTime", Some(30), Some("ax-root")),
         ];
         let (nodes, _) = project_ax_nodes(&raw_nodes, None);
@@ -2856,11 +2863,15 @@ mod tests {
             by_name["Author shadow"].capability.action_names(),
             ["click"]
         );
+        assert_eq!(by_name["Choose"].capability.action_names(), ["click"]);
         assert!(by_name["picker"].capability.action_names().is_empty());
         assert_eq!(by_name["picker"].backend_node_id, Some(11));
         assert!(by_name["year"].capability.action_names().is_empty());
         assert!(by_name["When"].capability.action_names().is_empty());
-        assert_eq!(by_name["Month"].capability.action_names(), ["click"]);
+        assert!(
+            by_name["Month"].capability.action_names().is_empty(),
+            "a DateTime host has no effect when its input type is unknown"
+        );
     }
 
     #[test]

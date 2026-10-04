@@ -169,12 +169,16 @@ own role, name, and backend node, and admits no effect.
 
 A successful DOM index that omits a node grants that node nothing. Depth
 truncation therefore cannot turn a browser-private shadow picker into a click
-target. When `DOM.getDocument` fails, legacy role admission remains only for
-nodes that are not accessibility descendants of `Date`, `DateTime`,
+target. When `DOM.getDocument` fails, legacy role admission remains for ordinary
+controls that are not accessibility descendants of `Date`, `DateTime`,
 `InputTime`, `ColorWell`, `spinbutton`, `slider`, or `combobox`. Those
-descendants admit nothing, so a shadow picker does not regain `click`. A
-top-level `DateTime` host may still admit `click` in that failure mode because
-its input type is unknown. Pages containing frames require successful DOM
+descendants admit nothing, so a shadow picker does not regain `click`.
+DOM classification failure preserves that legacy authority for ordinary
+controls, but does not grant role-only effect authority to an ambiguous
+top-level `DateTime` structured-control host. Its input type is unknown, so
+the runtime cannot distinguish `month`, `week`, and `datetime-local`, which
+admit `set_value` when classification succeeds. A custom `combobox` still
+keeps legacy `click`. Pages containing frames require successful DOM
 classification; they do not fall back to role-only authority when that read fails.
 `click`, `input_text`, `select_option`, `set_value`, and `upload_file` reject an
 element that does not list that action.
