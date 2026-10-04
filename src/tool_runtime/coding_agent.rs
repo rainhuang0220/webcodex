@@ -852,7 +852,7 @@ impl ToolRuntime {
                         return coding_agent_error(
                             "invalid_observation_token",
                             "observation token is invalid or belongs to another Run",
-                            retained_run_execution_state(&binding.snapshot),
+                            self.current_retained_execution_state(&binding).await,
                             RecoveryKind::FixInput,
                             Some(&run_id),
                         );
@@ -918,7 +918,7 @@ impl ToolRuntime {
                 return coding_agent_error(
                     "coding_agent_runner_unavailable",
                     error,
-                    retained_run_execution_state(&binding.snapshot),
+                    self.current_retained_execution_state(&binding).await,
                     RecoveryKind::Reobserve,
                     Some(&run_id),
                 );
@@ -937,7 +937,7 @@ impl ToolRuntime {
                     return coding_agent_error(
                         "coding_agent_observe_timeout",
                         "timed out waiting for bounded CodingAgentRun observation",
-                        retained_run_execution_state(&binding.snapshot),
+                        self.current_retained_execution_state(&binding).await,
                         RecoveryKind::Reobserve,
                         Some(&run_id),
                     );
@@ -949,7 +949,7 @@ impl ToolRuntime {
                     return coding_agent_error(
                         "invalid_runner_response",
                         "Runner returned mismatched CodingAgentRun identity",
-                        retained_run_execution_state(&binding.snapshot),
+                        self.current_retained_execution_state(&binding).await,
                         RecoveryKind::Reconcile,
                         Some(&run_id),
                     );
@@ -972,7 +972,7 @@ impl ToolRuntime {
                         return coding_agent_error(
                             "invalid_runner_response",
                             "owning Runner instance changed while observation was in flight",
-                            retained_run_execution_state(&binding.snapshot),
+                            self.current_retained_execution_state(&binding).await,
                             RecoveryKind::Reconcile,
                             Some(&run_id),
                         )
@@ -981,7 +981,7 @@ impl ToolRuntime {
                         return coding_agent_error(
                             "coding_agent_runner_unavailable",
                             "exact Runner became unavailable",
-                            retained_run_execution_state(&binding.snapshot),
+                            self.current_retained_execution_state(&binding).await,
                             RecoveryKind::Reobserve,
                             Some(&run_id),
                         )
@@ -997,7 +997,7 @@ impl ToolRuntime {
                         return coding_agent_error(
                             "coding_agent_observation_conflict",
                             error,
-                            retained_run_execution_state(&binding.snapshot),
+                            self.current_retained_execution_state(&binding).await,
                             RecoveryKind::Reconcile,
                             Some(&run_id),
                         )
@@ -1012,10 +1012,11 @@ impl ToolRuntime {
                 ))
             }
             _ => {
-                if runner_reports_unretained_run(&response) && binding.snapshot.state.terminal() {
+                let retained = self.current_retained_binding(&binding).await;
+                if runner_reports_unretained_run(&response) && retained.snapshot.state.terminal() {
                     return ToolResult::ok(observe_projection(
                         CodingAgentObserveResult {
-                            run: binding.snapshot.clone(),
+                            run: retained.snapshot.clone(),
                             events: Vec::new(),
                             first_retained_sequence: 1,
                             next_sequence: after_sequence.unwrap_or(0),
@@ -1026,7 +1027,7 @@ impl ToolRuntime {
                         token_reset,
                     ));
                 }
-                response_to_tool_error(response, Some(&run_id), &binding.snapshot)
+                response_to_tool_error(response, Some(&run_id), &retained.snapshot)
             }
         }
     }
@@ -1094,7 +1095,7 @@ impl ToolRuntime {
                 return coding_agent_error(
                     "coding_agent_cancel_unavailable",
                     error,
-                    retained_run_execution_state(&binding.snapshot),
+                    self.current_retained_execution_state(&binding).await,
                     RecoveryKind::Reobserve,
                     Some(&run_id),
                 )
@@ -1113,7 +1114,7 @@ impl ToolRuntime {
                     return coding_agent_error(
                         "coding_agent_cancel_timeout",
                         "cancel outcome is not yet authoritative; observe the same Run",
-                        retained_run_execution_state(&binding.snapshot),
+                        self.current_retained_execution_state(&binding).await,
                         RecoveryKind::Reobserve,
                         Some(&run_id),
                     );
@@ -1125,7 +1126,7 @@ impl ToolRuntime {
                     return coding_agent_error(
                         "invalid_runner_response",
                         "Runner returned mismatched CodingAgentRun identity",
-                        retained_run_execution_state(&binding.snapshot),
+                        self.current_retained_execution_state(&binding).await,
                         RecoveryKind::Reconcile,
                         Some(&run_id),
                     );
@@ -1142,7 +1143,7 @@ impl ToolRuntime {
                         return coding_agent_error(
                             "invalid_runner_response",
                             "owning Runner instance changed while cancellation was in flight",
-                            retained_run_execution_state(&binding.snapshot),
+                            self.current_retained_execution_state(&binding).await,
                             RecoveryKind::Reconcile,
                             Some(&run_id),
                         );
@@ -1158,7 +1159,7 @@ impl ToolRuntime {
                         return coding_agent_error(
                             "coding_agent_observation_conflict",
                             error,
-                            retained_run_execution_state(&binding.snapshot),
+                            self.current_retained_execution_state(&binding).await,
                             RecoveryKind::Reconcile,
                             Some(&run_id),
                         )
@@ -1167,7 +1168,10 @@ impl ToolRuntime {
                 self.record_coding_agent_lifecycle_if_needed(&run_id).await;
                 ToolResult::ok(cancel_projection(&merged.snapshot))
             }
-            _ => response_to_tool_error(response, Some(&run_id), &binding.snapshot),
+            _ => {
+                let retained = self.current_retained_binding(&binding).await;
+                response_to_tool_error(response, Some(&run_id), &retained.snapshot)
+            }
         }
     }
 
@@ -1349,6 +1353,19 @@ impl ToolRuntime {
             .bind(&client, run, None)
             .await
             .map(Some)
+    }
+
+    async fn current_retained_binding(&self, fallback: &ServerRunBinding) -> ServerRunBinding {
+        self.coding_agent_runs
+            .get(&fallback.snapshot.run_id)
+            .await
+            .filter(|current| run_matches_binding_identity(fallback, &current.snapshot))
+            .unwrap_or_else(|| fallback.clone())
+    }
+
+    async fn current_retained_execution_state(&self, fallback: &ServerRunBinding) -> &'static str {
+        let retained = self.current_retained_binding(fallback).await;
+        retained_run_execution_state(&retained.snapshot)
     }
 
     async fn current_agent_instance(
@@ -2988,6 +3005,97 @@ mod tests {
                 .snapshot
                 .state,
             CodingAgentRunState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn control_error_uses_newer_server_retained_execution_state() {
+        let runtime = ToolRuntime::new_for_tests();
+        let auth = owner_auth();
+        register_owned_runner(&runtime, "owner-retained").await;
+        let run_id = "wc_agent_run_concurrent_retained_advance";
+        bind_snapshot(
+            &runtime,
+            owned_snapshot(run_id, CodingAgentRunState::Starting, Some(&auth)),
+        )
+        .await;
+
+        let observe = tokio::spawn({
+            let runtime = runtime.clone();
+            let auth = auth.clone();
+            async move {
+                runtime
+                    .coding_agent_observe(run_id.to_string(), None, Some(0), Some(&auth))
+                    .await
+            }
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let request = loop {
+            if let Some(request) = runtime
+                .runner_registry
+                .poll(RunnerPollRequest {
+                    client_id: "client".to_string(),
+                    runner_instance_id: "instance".to_string(),
+                })
+                .await
+                .unwrap()
+            {
+                break request;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("CodingAgentRun request was not queued");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+
+        let binding = runtime.coding_agent_runs.get(run_id).await.unwrap();
+        let mut advanced = binding.snapshot.clone();
+        advanced.state = CodingAgentRunState::Running;
+        advanced.execution_state = CodingAgentExecutionState::Started;
+        advanced.observation_revision += 1;
+        advanced.updated_at += 1;
+        runtime
+            .coding_agent_runs
+            .merge_bound_snapshot(&binding, advanced)
+            .await
+            .unwrap();
+
+        runtime
+            .runner_registry
+            .complete(RunnerResultPayload {
+                result: RunnerResultRequest {
+                    client_id: "client".to_string(),
+                    runner_instance_id: "instance".to_string(),
+                    request_id: request.request_id,
+                    exit_code: None,
+                    stdout: None,
+                    stderr: None,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    duration_ms: None,
+                    error: None,
+                },
+                command_execution_state: None,
+                mcp_gateway: None,
+                plugin_gateway: None,
+                coding_agent: Some(CodingAgentResponse::error(
+                    CodingAgentDispatchState::NotStarted,
+                    "unknown_coding_agent_run",
+                    "CodingAgentRun is not retained by this Runner",
+                    Some("not_found"),
+                    Some("reobserve"),
+                )),
+            })
+            .await
+            .unwrap();
+
+        let result = observe.await.unwrap();
+        assert!(!result.success, "{:?}", result.output);
+        assert_eq!(result.output["error_kind"], "unknown_coding_agent_run");
+        assert_eq!(
+            result.output["execution_state"], "started",
+            "control errors must report newer Server-retained Run truth when it advanced in flight"
         );
     }
 
