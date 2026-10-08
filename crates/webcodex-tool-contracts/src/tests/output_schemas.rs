@@ -3894,3 +3894,25 @@ fn job_metadata_schema_accepts_runtime_structured_execution_values() {
     accept(run_skill_resource);
     accept(python);
 }
+
+#[test]
+fn detached_replay_execution_schema_accepts_retained_terminal_states() {
+    let schema = output_schema_for_tool("run_detached_process");
+    let execution = &schema["properties"]["output"]["properties"]["execution_state"];
+    for valid in [
+        "pending",
+        "not_started",
+        "outcome_unknown",
+        "timed_out",
+        "completed",
+    ] {
+        test_support::validate_schema_instance(&json!(valid), execution)
+            .unwrap_or_else(|error| panic!("{valid} rejected: {error}"));
+    }
+    for invalid in ["running", "unknown"] {
+        assert!(
+            test_support::validate_schema_instance(&json!(invalid), execution).is_err(),
+            "{invalid} must not expand the closed detached execution vocabulary"
+        );
+    }
+}
