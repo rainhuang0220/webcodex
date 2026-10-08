@@ -452,11 +452,28 @@ fn job_structured_execution_metadata_schema() -> Value {
                 "properties": {
                     "execution_source": {
                         "type": "string",
-                        "enum": ["run_process", "run_process_interactive", "run_detached_process", "run_script"]
+                        "enum": [
+                            "run_process",
+                            "run_process_interactive",
+                            "run_detached_process",
+                            "run_script",
+                            "project_build",
+                            "run_skill_resource"
+                        ]
                     },
                     "language": {
                         "anyOf": [
-                            {"type": "string", "enum": ["sh", "bash", "powershell", "javascript", "typescript"]},
+                            {
+                                "type": "string",
+                                "enum": [
+                                    "sh",
+                                    "bash",
+                                    "powershell",
+                                    "python",
+                                    "javascript",
+                                    "typescript"
+                                ]
+                            },
                             {"type": "null"}
                         ]
                     },

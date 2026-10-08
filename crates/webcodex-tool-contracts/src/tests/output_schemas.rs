@@ -3709,3 +3709,188 @@ fn structured_validation_sparse_assertion_never_weakens_rejection_or_uncertainty
         assert!(test_support::validate_schema_instance(&wire, &schema).is_err());
     }
 }
+
+fn retained_structured_execution_object(tool: &str) -> Value {
+    let schema = output_schema_for_tool(tool);
+    let node = match tool {
+        "list_jobs" => {
+            &schema["properties"]["output"]["properties"]["jobs"]["items"]["properties"]
+                ["structured_execution"]
+        }
+        "observe_jobs" => {
+            &schema["properties"]["output"]["anyOf"][0]["properties"]["items"]["items"]
+                ["properties"]["output"]["anyOf"][0]["properties"]["structured_execution"]
+        }
+        "read_job_tail" => &schema["properties"]["output"]["properties"]["structured_execution"],
+        other => panic!("no retained structured_execution projection for {other}"),
+    };
+    assert_eq!(
+        node["anyOf"][1]["type"],
+        json!("null"),
+        "{tool} structured_execution must stay nullable"
+    );
+    let object = node["anyOf"][0].clone();
+    assert_eq!(
+        object["additionalProperties"],
+        json!(false),
+        "{tool} structured_execution must stay closed"
+    );
+    assert!(
+        object["properties"]["execution_source"]["enum"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value == "run_script")),
+        "{tool} did not expose the shared structured_execution object"
+    );
+    object
+}
+
+fn list_jobs_result_with_structured_execution(metadata: Value) -> Value {
+    json!({
+        "success": true,
+        "output": {
+            "jobs": [{
+                "job_id": "job_structured",
+                "kind": "structured",
+                "status": "running",
+                "project": "agent:client:demo",
+                "executor": "agent",
+                "created_at": 1,
+                "started_at": null,
+                "ended_at": null,
+                "exit_code": null,
+                "activity": null,
+                "structured_execution": metadata
+            }],
+            "count": 1,
+            "matched_count": 1,
+            "truncated": false
+        },
+        "error": null
+    })
+}
+
+#[test]
+fn job_metadata_schema_accepts_runtime_structured_execution_values() {
+    let tools = ["list_jobs", "observe_jobs", "read_job_tail"];
+    let schemas = tools.map(retained_structured_execution_object);
+    assert_eq!(schemas[0], schemas[1]);
+    assert_eq!(schemas[0], schemas[2]);
+    let object = &schemas[0];
+    let list_jobs = output_schema_for_tool("list_jobs");
+    let language_enum = &object["properties"]["language"]["anyOf"][0];
+
+    let accept = |metadata: Value| {
+        for (tool, schema) in tools.into_iter().zip(schemas.iter()) {
+            test_support::validate_schema_instance(&metadata, schema).unwrap_or_else(|error| {
+                panic!("{tool} rejected retained metadata {metadata}: {error}")
+            });
+        }
+        test_support::validate_schema_instance(
+            &list_jobs_result_with_structured_execution(metadata.clone()),
+            &list_jobs,
+        )
+        .unwrap_or_else(|error| panic!("list_jobs envelope rejected {metadata}: {error}"));
+    };
+
+    for (execution_source, language, script_bytes, stdin_present) in [
+        ("run_process", Value::Null, Value::Null, false),
+        ("run_process_interactive", Value::Null, Value::Null, false),
+        ("run_detached_process", Value::Null, Value::Null, false),
+        ("run_script", json!("sh"), json!(4), false),
+        ("run_script", json!("bash"), json!(4), true),
+        ("run_script", json!("powershell"), json!(4), false),
+        ("run_script", json!("javascript"), json!(4), false),
+        ("run_script", json!("typescript"), json!(4), false),
+    ] {
+        accept(json!({
+            "execution_source": execution_source,
+            "language": language,
+            "script_bytes": script_bytes,
+            "arg_count": 0,
+            "stdin_present": stdin_present
+        }));
+    }
+
+    let run_shell = json!({
+        "execution_source": "run_shell",
+        "language": null,
+        "script_bytes": null,
+        "arg_count": 0,
+        "stdin_present": false
+    });
+    let run_shell_error = test_support::validate_schema_instance(&run_shell, object)
+        .expect_err("run_shell is not retained structured metadata");
+    assert!(
+        run_shell_error.contains("execution_source")
+            && run_shell_error.contains("outside the declared enum"),
+        "{run_shell_error}"
+    );
+    assert!(test_support::validate_schema_instance(
+        &list_jobs_result_with_structured_execution(run_shell),
+        &list_jobs,
+    )
+    .is_err());
+
+    let ruby = json!({
+        "execution_source": "run_script",
+        "language": "ruby",
+        "script_bytes": 4,
+        "arg_count": 0,
+        "stdin_present": false
+    });
+    let ruby_error = test_support::validate_schema_instance(&json!("ruby"), language_enum)
+        .expect_err("ruby is not a script language");
+    assert!(
+        ruby_error.contains("outside the declared enum"),
+        "{ruby_error}"
+    );
+    assert!(test_support::validate_schema_instance(&ruby, object).is_err());
+    assert!(test_support::validate_schema_instance(
+        &list_jobs_result_with_structured_execution(ruby),
+        &list_jobs,
+    )
+    .is_err());
+
+    let project_build = json!({
+        "execution_source": "project_build",
+        "language": null,
+        "script_bytes": null,
+        "arg_count": 2,
+        "stdin_present": false
+    });
+    let run_skill_resource = json!({
+        "execution_source": "run_skill_resource",
+        "language": null,
+        "script_bytes": null,
+        "arg_count": 1,
+        "stdin_present": true
+    });
+    let python = json!({
+        "execution_source": "run_script",
+        "language": "python",
+        "script_bytes": 24,
+        "arg_count": 1,
+        "stdin_present": false
+    });
+    let mut rejected = Vec::new();
+    for (label, metadata) in [
+        ("project_build", &project_build),
+        ("run_skill_resource", &run_skill_resource),
+        ("python", &python),
+    ] {
+        if let Err(error) = test_support::validate_schema_instance(metadata, object) {
+            rejected.push(format!("{label}: {error}"));
+        }
+    }
+    if let Err(error) = test_support::validate_schema_instance(&json!("python"), language_enum) {
+        rejected.push(format!("python language enum: {error}"));
+    }
+    assert!(
+        rejected.is_empty(),
+        "retained job metadata schema rejected runtime values:\n{}",
+        rejected.join("\n")
+    );
+    accept(project_build);
+    accept(run_skill_resource);
+    accept(python);
+}
