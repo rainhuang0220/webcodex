@@ -999,6 +999,12 @@ impl ShellJobStructuredExecutionMetadata {
                     && self.validation_tool.is_none()
                     && self.assertion_name.is_none()
             }
+            "run_skill_resource" => {
+                self.language.is_none()
+                    && self.script_bytes.is_none()
+                    && self.arg_count <= PROCESS_ARG_MAX_COUNT
+                    && self.stdin_present
+            }
             "run_script" => {
                 self.language.is_some()
                     && self
