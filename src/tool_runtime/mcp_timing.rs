@@ -150,6 +150,69 @@ mod tests {
     }
 
     #[test]
+    fn explicit_host_timing_caps_flow_to_real_mcp_wait_paths_only() {
+        let policy = {
+            let mut env = crate::test_support::TestEnvGuard::new();
+            env.set("WEBCODEX_MCP_HOST_SYNC_WAIT_MAX_SECS", "8");
+            env.set("WEBCODEX_MCP_HOST_CONTINUATION_WAIT_MAX_SECS", "12");
+            host_code_mode_policy()
+                .with_timing_overrides(crate::mcp_host::McpHostTimingOverrides::from_env().unwrap())
+        };
+        let mut run = ToolCall::from_tool_name(
+            "run_shell",
+            serde_json::json!({"project":"demo","command":"true","sync_wait_secs":55}),
+        )
+        .unwrap();
+        normalize_structured_for_transport(&mut run, SessionTransport::Mcp, policy);
+        match run {
+            ToolCall::RunShell { sync_wait_secs, .. } => assert_eq!(sync_wait_secs, Some(8)),
+            _ => unreachable!(),
+        }
+
+        let mut observe = ToolCall::from_tool_name(
+            "observe_jobs",
+            serde_json::json!({"items":[{"job_id":"job"}],"wait_secs":55}),
+        )
+        .unwrap();
+        normalize_observation_call_timing(&mut observe, SessionTransport::Mcp, policy);
+        match observe {
+            ToolCall::ObserveJobs { wait_secs, .. } => assert_eq!(wait_secs, Some(12)),
+            _ => unreachable!(),
+        }
+
+        let mut ready = ToolCall::from_tool_name(
+            "wait_for_job_readiness",
+            serde_json::json!({"job_ids":["job"],"mode":"any","wait_secs":45}),
+        )
+        .unwrap();
+        normalize_observation_call_timing(&mut ready, SessionTransport::Mcp, policy);
+        match ready {
+            ToolCall::WaitForJobReadiness { wait_secs, .. } => assert_eq!(wait_secs, 45),
+            _ => unreachable!(),
+        }
+
+        let mut result = ToolResult::ok(serde_json::json!({
+            "continuation": {
+                "tool": "observe_jobs",
+                "arguments": {"wait_secs":55,"items":[{"job_id":"job"}]}
+            }
+        }));
+        normalize_result_timing(&mut result, SessionTransport::Mcp, policy);
+        assert_eq!(result.output["continuation"]["arguments"]["wait_secs"], 12);
+
+        let mut api = ToolCall::from_tool_name(
+            "run_shell",
+            serde_json::json!({"project":"demo","command":"true","sync_wait_secs":55}),
+        )
+        .unwrap();
+        normalize_structured_for_transport(&mut api, SessionTransport::Api, policy);
+        match api {
+            ToolCall::RunShell { sync_wait_secs, .. } => assert_eq!(sync_wait_secs, Some(55)),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
     fn mcp_structured_execution_defaults_and_clamps_sync_wait() {
         let policy = host_code_mode_policy();
         let mut default_call = ToolCall::from_tool_name(

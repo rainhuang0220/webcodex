@@ -57,3 +57,16 @@ The following records identify representative knobs across the required runtime 
 - `apps/desktop/src-tauri/src/state/readiness.rs`: Desktop-managed Server deployment values
 
 This is a **first-stage representative inventory**, not certification that every internal constant has been audited or that advanced tuning is ready to expose. Re-audit against the then-current main before Phase 2.
+
+## Phase 2 addendum — independently bounded Server waits
+
+This section supersedes the **not separately configurable** classification of the two timing candidates in the Phase 1 historical table above. It is not a reinterpretation of its `main@6f8ed6d8` source snapshot.
+
+- `WEBCODEX_MCP_HOST_SYNC_WAIT_MAX_SECS` (optional integer, 1–60) controls the deployment ceiling for MCP structured-execution synchronous handoff.
+- `WEBCODEX_MCP_HOST_CONTINUATION_WAIT_MAX_SECS` (optional integer, 1–100) controls ordinary MCP Job observation and generated `observe_jobs` continuation waiting.
+- Both are parsed once on Server startup, require restart, reject invalid input without echoing values, and are limited by the request's effective Host budget minus the existing return guard.
+- These explicit deployment caps are retained internally through request-local profile changes, so changing `X-WebCodex-MCP-Profile` cannot escape them. The request-local Host budget still can only narrow the deployment budget.
+- When omitted, profile defaults and prior request-local profile switching behavior remain unchanged. `wait_for_job_readiness`, API transport, Runner configuration, Job execution lifetime and internal Code Mode child controls are unchanged.
+- The legacy `initial_job_handoff_secs` projection remains present and does not become a control. Effective values appear in the existing allowlisted `get_runtime_status` deployment configuration, without disclosing environment names/contents or internal cap metadata.
+
+These are controlled tuning **capabilities**, not evidence that an 8-second policy performs better. Collect before/after metrics and final Job outcomes separately; retain the original default values until tested.
