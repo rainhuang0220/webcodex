@@ -102,6 +102,9 @@ impl McpHostConfig {
 pub(crate) struct McpHostRuntimePolicy {
     pub(crate) profile: McpHostProfile,
     pub(crate) host_budget_secs: u64,
+    /// Legacy diagnostic-only projection. No execution path reads this field;
+    /// synchronous handoff uses max_sync_wait_secs instead. Retained for
+    /// existing runtime_status consumers, not a new operator tuning knob.
     pub(crate) initial_job_handoff_secs: u64,
     pub(crate) max_sync_wait_secs: u64,
     pub(crate) continuation_wait_secs: u64,
