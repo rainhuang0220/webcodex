@@ -3334,3 +3334,93 @@ fn validation_ruff_profiles_keep_native_outcomes_and_do_not_borrow_counts() {
     .unwrap();
     assert_eq!(contradiction["passed"], false);
 }
+
+#[test]
+fn node_native_test_evidence_requires_complete_tap_and_agrees_with_process_result() {
+    use crate::tool_runtime::jobs::validation_job_projection_with_policy;
+    let output = "TAP version 13\n# Subtest: works\nok 1 - works\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 13.3\n";
+    for (truncated, minimum, expected) in [(false, 1, true), (false, 2, false), (true, 1, false)] {
+        let result = validation_job_projection_with_policy(
+            Some("node:tap:test"),
+            Some("test"),
+            "completed",
+            Some(0),
+            output,
+            "",
+            truncated,
+            None,
+            Some(minimum),
+            Some(true),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["passed"], expected);
+        assert_eq!(
+            result["tests_run_count"],
+            if truncated {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(1)
+            }
+        );
+        assert_eq!(
+            result["test_count_assertion"]["status"],
+            if truncated {
+                "unproven"
+            } else if expected {
+                "passed"
+            } else {
+                "failed"
+            }
+        );
+    }
+    let unproven_without_minimum = validation_job_projection_with_policy(
+        Some("node:tap:test"),
+        Some("test"),
+        "completed",
+        Some(0),
+        "TAP version 13\n",
+        "",
+        false,
+        None,
+        None,
+        Some(false),
+        None,
+    )
+    .unwrap();
+    assert_eq!(unproven_without_minimum["passed"], false);
+    assert!(unproven_without_minimum["tests_run_count"].is_null());
+    let truncated_without_minimum = validation_job_projection_with_policy(
+        Some("node:tap:test"),
+        Some("test"),
+        "completed",
+        Some(0),
+        output,
+        "",
+        true,
+        None,
+        None,
+        Some(false),
+        None,
+    )
+    .unwrap();
+    assert_eq!(truncated_without_minimum["passed"], false);
+    let contradiction = validation_job_projection_with_policy(
+        Some("node:tap:test"),
+        Some("test"),
+        "completed",
+        Some(0),
+        &output
+            .replace("# fail 0", "# fail 1")
+            .replace("# tests 1", "# tests 2"),
+        "",
+        false,
+        None,
+        Some(1),
+        Some(true),
+        None,
+    )
+    .unwrap();
+    assert!(!contradiction["passed"].as_bool().unwrap());
+    assert!(contradiction["tests_run_count"].is_null());
+}
