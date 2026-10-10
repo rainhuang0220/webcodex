@@ -258,6 +258,7 @@ def _validate_comparison_summary(value: object) -> dict:
     availability = value.get("availability")
     timing = value.get("timing_ms")
     if (not isinstance(availability, dict) or not isinstance(timing, dict)
+            or not all(key in timing for key in DURATION_FIELDS)
             or any(type(availability.get(key)) is not int or availability[key] < 0
                    for key in DURATION_SAMPLE_FIELDS)
             or any(timing.get(key) is not None and (

@@ -135,6 +135,9 @@ class HostTimingReportTests(unittest.TestCase):
                                           "structured_request_duration_samples": -1}},
             {**baseline, "timing_ms": {**baseline["timing_ms"],
                                       "structured_request_p90": -20}},
+            {**baseline, "timing_ms": {}},
+            {**baseline, "timing_ms": {key: value for key, value in baseline["timing_ms"].items()
+                                        if key != "readiness_wait_p90"}},
             {**baseline, "selection": {**baseline["selection"], "project_filter_applied": False}},
             {**baseline, "model_turns": 2},
             {**baseline, "final_job_outcomes": {"success": True}},
