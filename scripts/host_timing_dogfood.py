@@ -35,12 +35,9 @@ class ReportError(ValueError):
     pass
 
 
-def _load_policy(path: Path) -> dict:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise ReportError("cannot read cohort configuration JSON") from exc
-    if not isinstance(value, dict) or set(value) != COHORT_FIELDS or value.get("schema_version") != 1:
+def _validate_policy(value: object) -> dict:
+    if (not isinstance(value, dict) or set(value) != COHORT_FIELDS
+            or type(value.get("schema_version")) is not int or value["schema_version"] != 1):
         raise ReportError("cohort configuration must use the exact schema v1 fields")
     for field in ("cohort", "case_id"):
         if not isinstance(value[field], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", value[field]):
@@ -58,6 +55,14 @@ def _load_policy(path: Path) -> dict:
     if value["continuation_wait_secs"] > max(1, value["host_budget_secs"] - 5):
         raise ReportError("continuation_wait_secs exceeds declared safe Host budget")
     return value
+
+
+def _load_policy(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ReportError("cannot read cohort configuration JSON") from exc
+    return _validate_policy(value)
 
 
 def _timestamp(raw: str) -> int:
@@ -159,6 +164,7 @@ def summarize(db: Path, policy: dict, project: str, start: int, end: int) -> dic
         "kind": "host_timing_dogfood_summary",
         "cohort": policy,
         "cohort_evidence": "operator_declared_not_verified_by_audit",
+        "duration_basis": "legacy_action_audit_pre_response_handoff_not_host_latency",
         "selection": {"start_utc": datetime.fromtimestamp(start, tz=timezone.utc).isoformat(),
                       "end_utc": datetime.fromtimestamp(end, tz=timezone.utc).isoformat(),
                       "project_filter_applied": True, "events_selected": len(rows)},
@@ -189,18 +195,99 @@ def summarize(db: Path, policy: dict, project: str, start: int, end: int) -> dic
         "model_turns": None,
         "final_job_outcomes": None,
         "correctness": None,
-        "interpretation": "Request-level observations only; handed-off MCP calls do not prove final Job success; no causal or model-turn inference.",
+        "interpretation": "Legacy ActionAudit duration may end before response handoff; not Host-visible latency. Handed-off MCP calls do not prove final Job success; no causal or model-turn inference.",
     }
 
 
-def compare(left: dict, right: dict) -> dict:
-    if any(v.get("kind") != "host_timing_dogfood_summary" or v.get("schema_version") != 1 for v in (left, right)):
+COUNT_FIELDS = (
+    "outer_tool_calls", "canonical_calls", "meaningful_outer_calls_proxy",
+    "structured_calls", "handoff_state_calls", "in_call_completed_state_calls",
+    "structured_state_unclassified", "observation_calls", "readiness_calls",
+    "readiness_wait_unavailable", "canonical_record_unavailable", "outcome_unknown_calls",
+)
+COMPARE_METRICS = (
+    "structured_calls", "handoff_state_calls", "observation_calls",
+    "readiness_calls", "outcome_unknown_calls",
+)
+DURATION_SAMPLE_FIELDS = (
+    "structured_request_duration_samples", "observation_request_duration_samples",
+    "readiness_wait_samples",
+)
+DURATION_FIELDS = (
+    "structured_request_p50", "structured_request_p90", "observation_request_p50",
+    "observation_request_p90", "readiness_wait_p50", "readiness_wait_p90",
+)
+
+
+def _validate_comparison_summary(value: object) -> dict:
+    # Strictly validate the shape before dereferencing/arithmetic. Parsed JSON
+    # from disk is untrusted and must not be able to fabricate negative deltas.
+    if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+            or value["schema_version"] != 1
+            or value.get("kind") != "host_timing_dogfood_summary"):
         raise ReportError("both inputs must be host_timing_dogfood_summary v1")
+    _validate_policy(value.get("cohort"))
+    if (value.get("cohort_evidence") != "operator_declared_not_verified_by_audit"
+            or value.get("duration_basis") not in (
+                None, "legacy_action_audit_pre_response_handoff_not_host_latency",
+            )):
+        raise ReportError("unrecognized comparison evidence provenance")
+    for name in ("model_turns", "task_wall_time_ms", "final_job_outcomes", "correctness"):
+        if name not in value or value[name] is not None:
+            raise ReportError("comparison requires unproven task outcomes to remain null")
+    counts = value.get("counts")
+    if not isinstance(counts, dict) or any(
+        type(counts.get(key)) is not int or not 0 <= counts[key] <= MAX_ROWS
+        for key in COUNT_FIELDS
+    ):
+        raise ReportError("summary counters must be nonnegative integers")
+    if (counts["canonical_calls"] + counts["canonical_record_unavailable"] != counts["outer_tool_calls"]
+            or counts["meaningful_outer_calls_proxy"] > counts["outer_tool_calls"]
+            or counts["structured_calls"] + counts["observation_calls"] + counts["readiness_calls"] > counts["canonical_calls"]
+            or (counts["handoff_state_calls"] + counts["in_call_completed_state_calls"]
+                + counts["structured_state_unclassified"]) != counts["structured_calls"]
+            or counts["readiness_wait_unavailable"] > counts["readiness_calls"]
+            or counts["outcome_unknown_calls"] > counts["canonical_calls"]):
+        raise ReportError("summary counter relationships are inconsistent")
+    selection = value.get("selection")
+    if (not isinstance(selection, dict)
+            or selection.get("project_filter_applied") is not True
+            or type(selection.get("events_selected")) is not int
+            or not counts["outer_tool_calls"] <= selection["events_selected"] <= MAX_ROWS):
+        raise ReportError("summary selection bounds are inconsistent")
+    availability = value.get("availability")
+    timing = value.get("timing_ms")
+    if (not isinstance(availability, dict) or not isinstance(timing, dict)
+            or any(type(availability.get(key)) is not int or availability[key] < 0
+                   for key in DURATION_SAMPLE_FIELDS)
+            or any(timing.get(key) is not None and (
+                type(timing[key]) is not int or timing[key] < 0
+            ) for key in DURATION_FIELDS)):
+        raise ReportError("summary timing and sample counts are invalid")
+    if any(
+        availability[sample] > counts[category]
+        for sample, category in zip(DURATION_SAMPLE_FIELDS, (
+            "structured_calls", "observation_calls", "readiness_calls"
+        ))
+    ):
+        raise ReportError("summary duration samples exceed observed calls")
+    for sample, p50, p90 in zip(DURATION_SAMPLE_FIELDS,
+            DURATION_FIELDS[::2], DURATION_FIELDS[1::2]):
+        if ((availability[sample] == 0) != (timing.get(p50) is None)
+                or (availability[sample] == 0) != (timing.get(p90) is None)
+                or (timing[p50] is not None and timing[p50] > timing[p90])):
+            raise ReportError("summary duration quantiles contradict sample availability")
+    return value
+
+
+def compare(left: dict, right: dict) -> dict:
+    left = _validate_comparison_summary(left)
+    right = _validate_comparison_summary(right)
     a, b = left["cohort"], right["cohort"]
     comparable = all(a.get(key) == b.get(key) for key in (
         "case_id", "base_revision", "host_profile", "host_budget_secs", "continuation_wait_secs",
     )) and a.get("sync_wait_secs") != b.get("sync_wait_secs") and a.get("cohort") != b.get("cohort")
-    metrics = ("structured_calls", "handoff_state_calls", "observation_calls", "readiness_calls", "outcome_unknown_calls")
+    metrics = COMPARE_METRICS
     return {
         "schema_version": 1, "kind": "host_timing_dogfood_comparison",
         "comparable_configuration": comparable,

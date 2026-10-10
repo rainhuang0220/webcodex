@@ -1,4 +1,7 @@
+import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -105,6 +108,70 @@ class HostTimingReportTests(unittest.TestCase):
         compared = report.compare(left, right)
         self.assertFalse(compared["comparable_configuration"])
         self.assertIsNone(compared["descriptive_deltas"]["handoff_state_calls"])
+
+    def test_compare_rejects_untrusted_and_fabricated_summaries(self):
+        baseline = self.summarize()
+        candidate = copy.deepcopy(baseline)
+        candidate["cohort"] = policy("candidate", wait=8)
+        corruptions = [
+            [],
+            None,
+            "private-secret",
+            {},
+            {**baseline, "schema_version": True},
+            {**baseline, "cohort": None},
+            {**baseline, "cohort": []},
+            {**baseline, "cohort": {**policy(), "sync_wait_secs": -1}},
+            {**baseline, "cohort": {**policy(), "host_budget_secs": True}},
+            {**baseline, "counts": None},
+            {**baseline, "counts": {**baseline["counts"], "structured_calls": -1}},
+            {**baseline, "counts": {**baseline["counts"], "handoff_state_calls": True}},
+            {**baseline, "counts": {**baseline["counts"], "structured_calls": 100001}},
+            {**baseline, "counts": {**baseline["counts"], "handoff_state_calls": 4}},
+            {**baseline, "counts": {**baseline["counts"], "observation_calls": "1"}},
+            {**baseline, "counts": {key: value for key, value in baseline["counts"].items()
+                                     if key != "readiness_calls"}},
+            {**baseline, "availability": {**baseline["availability"],
+                                          "structured_request_duration_samples": -1}},
+            {**baseline, "timing_ms": {**baseline["timing_ms"],
+                                      "structured_request_p90": -20}},
+            {**baseline, "selection": {**baseline["selection"], "project_filter_applied": False}},
+            {**baseline, "model_turns": 2},
+            {**baseline, "final_job_outcomes": {"success": True}},
+        ]
+        for corrupt in corruptions:
+            with self.subTest(corrupt=repr(corrupt)[:70]):
+                with self.assertRaises(report.ReportError):
+                    report.compare(corrupt, candidate)
+                with self.assertRaises(report.ReportError):
+                    report.compare(candidate, corrupt)
+
+    def test_cli_malformed_json_is_rejected_with_static_error(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root) / "base.json"
+            candidate = Path(root) / "candidate.json"
+            for invalid in (["private-secret"], {"cohort": None}, {"counts": {"structured_calls": -1}}):
+                base.write_text(json.dumps(invalid), encoding="utf-8")
+                candidate.write_text(json.dumps(self.summarize()), encoding="utf-8")
+                process = subprocess.run([
+                    sys.executable, str(Path(report.__file__).resolve()),
+                    "compare", "--baseline", str(base), "--candidate", str(candidate)
+                ], text=True, capture_output=True, check=False)
+                self.assertEqual(process.returncode, 2)
+                self.assertEqual(process.stdout, "")
+                self.assertIn("host_timing_dogfood:", process.stderr)
+                self.assertNotIn("Traceback", process.stderr)
+                self.assertNotIn("private-secret", process.stderr)
+                self.assertNotIn(str(base), process.stderr)
+
+    def test_legacy_duration_is_not_labeled_host_latency(self):
+        result = self.summarize()
+        self.assertEqual(
+            result["duration_basis"],
+            "legacy_action_audit_pre_response_handoff_not_host_latency"
+        )
+        self.assertIn("before response handoff", result["interpretation"])
+        self.assertIsNone(result["task_wall_time_ms"])
 
     def test_empty_range_marks_unmeasured_metrics_unavailable(self):
         result = report.summarize(self.db, policy(), "agent:special:webcodex", 110, 120)
