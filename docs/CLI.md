@@ -181,7 +181,7 @@ service. `webcodex` and `webcodex-runner` remain separate executables.
 | --- | --- |
 | `webcodex runner init` | Generate a `runner.toml` config manually |
 | `webcodex runner install` | Install, enable, and start the Runner service |
-| `webcodex runner run` | Run `webcodex-runner` in the foreground |
+| `webcodex runner run` | Run `webcodex-runner` in the foreground. Omitting `--profile` and `--config` leaves config resolution to `webcodex-runner`. |
 | `webcodex runner start` | Start a hosted background Runner or installed profile service |
 | `webcodex runner stop` | Stop it |
 | `webcodex runner restart` | Restart it |

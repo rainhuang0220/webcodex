@@ -122,7 +122,7 @@ Runner 可执行文件是 `webcodex-runner`。其规范 CLI 生命周期命名�
 | --- | --- |
 | `webcodex runner init` | 手动生成 `runner.toml` 配置 |
 | `webcodex runner install` | 安装、启用并启动 Runner 服务 |
-| `webcodex runner run` | 前台运行 `webcodex-runner` |
+| `webcodex runner run` | 前台运行 `webcodex-runner`。省略 `--profile` 和 `--config` 时，由 `webcodex-runner` 自行解析配置。 |
 | `webcodex runner start` | 启动 hosted 后台 Runner 或已安装的 profile 服务 |
 | `webcodex runner stop` | 停止 |
 | `webcodex runner restart` | 重启 |
