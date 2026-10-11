@@ -81,6 +81,7 @@ struct ProviderFailure {
     code: &'static str,
     dispatch_state: McpGatewayDispatchState,
     fatal: bool,
+    detail: Option<String>,
 }
 
 impl ProviderFailure {
@@ -89,6 +90,7 @@ impl ProviderFailure {
             code,
             dispatch_state: McpGatewayDispatchState::NotStarted,
             fatal: true,
+            detail: None,
         }
     }
 
@@ -97,6 +99,7 @@ impl ProviderFailure {
             code,
             dispatch_state: McpGatewayDispatchState::OutcomeUnknown,
             fatal: true,
+            detail: None,
         }
     }
 
@@ -109,7 +112,20 @@ impl ProviderFailure {
             // poison the whole provider instance; only transport/protocol
             // failures that lose correlation retire the session.
             fatal: false,
+            detail: None,
         }
+    }
+
+    fn with_detail(mut self, mut detail: String) -> Self {
+        if detail.len() > 512 {
+            let mut end = 512;
+            while !detail.is_char_boundary(end) {
+                end -= 1;
+            }
+            detail.truncate(end);
+        }
+        self.detail = Some(detail);
+        self
     }
 
     fn not_started(code: &'static str) -> Self {
@@ -117,6 +133,7 @@ impl ProviderFailure {
             code,
             dispatch_state: McpGatewayDispatchState::NotStarted,
             fatal: false,
+            detail: None,
         }
     }
 
@@ -132,6 +149,7 @@ impl ProviderFailure {
             code: "provider_rpc_error",
             dispatch_state: McpGatewayDispatchState::Completed,
             fatal: false,
+            detail: None,
         }
     }
 }
@@ -794,7 +812,9 @@ impl ProviderConnection {
                 meta,
             });
         }
-        validate_tools(&tools).map_err(|_| ProviderFailure::completed("invalid_provider_tools"))?;
+        validate_tools(&tools).map_err(|error| {
+            ProviderFailure::completed("invalid_provider_tools").with_detail(error)
+        })?;
         Ok(tools)
     }
 
@@ -1191,18 +1211,21 @@ fn validate_initialize_result(result: &Value) -> Result<(), ProviderFailure> {
 
 fn provider_failure_response(error: ProviderFailure) -> McpGatewayResponse {
     let state = error.dispatch_state;
-    let message = match state {
-        McpGatewayDispatchState::NotStarted => {
-            "Provider request was not started; no downstream effect was dispatched"
+    let message = error.detail.unwrap_or_else(|| {
+        match state {
+            McpGatewayDispatchState::NotStarted => {
+                "Provider request was not started; no downstream effect was dispatched"
+            }
+            McpGatewayDispatchState::OutcomeUnknown => {
+                "Provider request may have been dispatched; outcome is unknown and must not be retried automatically"
+            }
+            McpGatewayDispatchState::Completed => {
+                "Provider completed the request-response exchange but returned a downstream error or unsupported/invalid bounded result"
+            }
         }
-        McpGatewayDispatchState::OutcomeUnknown => {
-            "Provider request may have been dispatched; outcome is unknown and must not be retried automatically"
-        }
-        McpGatewayDispatchState::Completed => {
-            "Provider completed the request-response exchange but returned a downstream error or unsupported/invalid bounded result"
-        }
-    };
-    bridge_error(state, error.code, message)
+        .to_string()
+    });
+    McpGatewayResponse::error(state, error.code, message)
 }
 
 fn bridge_error(

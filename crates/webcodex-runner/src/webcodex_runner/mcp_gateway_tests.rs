@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tempfile::TempDir;
 use webcodex_core::mcp_gateway::{
     McpGatewayContent, McpGatewayResponsePayload, McpGatewaySchemaObservation,
-    MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES, MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
+    MCP_GATEWAY_MAX_DESCRIPTION_BYTES, MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES,
+    MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
     MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES, MCP_GATEWAY_MAX_RESULT_BYTES,
 };
 
@@ -1110,6 +1111,33 @@ fn malformed_unknown_and_duplicate_responses_fail_closed() {
     assert_eq!(
         response.error.as_ref().unwrap().code,
         "provider_duplicate_response_id"
+    );
+}
+
+#[test]
+fn long_provider_description_is_listed_and_oversize_names_the_tool() {
+    let listed = Fixture::new("long_description", 2);
+    let response = listed.list(&listed.provider());
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let Some(McpGatewayResponsePayload::Tools { tools }) = response.payload else {
+        panic!("expected tools, got {:?}", response.payload);
+    };
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "echo");
+    assert_eq!(tools[0].description.as_deref().map(str::len), Some(20_000));
+
+    let rejected = Fixture::new("bad_tools", 2);
+    let response = rejected.list(&rejected.provider());
+    let error = response.error.expect("oversize description is rejected");
+    assert_eq!(error.code, "invalid_provider_tools");
+    assert_eq!(response.dispatch_state, McpGatewayDispatchState::Completed);
+    assert!(error.message.contains("echo"), "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains(&MCP_GATEWAY_MAX_DESCRIPTION_BYTES.to_string()),
+        "{}",
+        error.message
     );
 }
 

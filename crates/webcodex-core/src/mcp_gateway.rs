@@ -15,7 +15,9 @@ pub const MCP_GATEWAY_MAX_PROVIDER_ID_BYTES: usize = 64;
 pub const MCP_GATEWAY_MAX_PROVIDER_NAME_BYTES: usize = 128;
 pub const MCP_GATEWAY_MAX_TOOL_COUNT: usize = 128;
 pub const MCP_GATEWAY_MAX_TOOL_NAME_BYTES: usize = 128;
-pub const MCP_GATEWAY_MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
+/// Composite third-party tools keep operational documentation in `description`.
+/// The whole tools/list message remains capped by `MCP_GATEWAY_MAX_MESSAGE_BYTES`.
+pub const MCP_GATEWAY_MAX_DESCRIPTION_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_SCHEMA_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_ARGUMENT_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_STRUCTURED_CONTENT_BYTES: usize = 512 * 1024;
@@ -421,8 +423,8 @@ pub fn validate_tools(tools: &[McpGatewayTool]) -> Result<(), String> {
         if let Some(description) = tool.description.as_deref() {
             if description.len() > MCP_GATEWAY_MAX_DESCRIPTION_BYTES {
                 return Err(format!(
-                    "tool description exceeds maximum {} bytes",
-                    MCP_GATEWAY_MAX_DESCRIPTION_BYTES
+                    "tool '{}' description exceeds maximum {} bytes",
+                    tool.name, MCP_GATEWAY_MAX_DESCRIPTION_BYTES
                 ));
             }
             validate_text_controls(description, "tool description")?;
@@ -958,5 +960,27 @@ mod tests {
             "isError": false
         });
         assert!(serde_json::from_value::<McpGatewayToolResult>(raw).is_err());
+    }
+
+    #[test]
+    fn composite_tool_description_above_four_kib_remains_listed() {
+        let tool = |name: &str, bytes: usize| McpGatewayTool {
+            name: name.to_string(),
+            title: None,
+            description: Some("x".repeat(bytes)),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            annotations: None,
+            meta: None,
+        };
+        validate_tools(&[tool("timeline", 20_000), tool("echo", 32)])
+            .expect("a 20000-byte composite description stays inside the gateway bound");
+        let error = validate_tools(&[tool("timeline", MCP_GATEWAY_MAX_DESCRIPTION_BYTES + 1)])
+            .expect_err("one byte past the description bound is rejected");
+        assert!(error.contains("timeline"), "{error}");
+        assert!(
+            error.contains(&MCP_GATEWAY_MAX_DESCRIPTION_BYTES.to_string()),
+            "{error}"
+        );
     }
 }

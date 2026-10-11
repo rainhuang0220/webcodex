@@ -159,7 +159,10 @@ fn main() -> io::Result<()> {
                     continue;
                 }
                 let description = if scenario == "bad_tools" {
-                    "x".repeat(5 * 1024)
+                    // One byte past MCP_GATEWAY_MAX_DESCRIPTION_BYTES (64 KiB).
+                    "x".repeat(64 * 1024 + 1)
+                } else if scenario == "long_description" {
+                    "x".repeat(20_000)
                 } else {
                     "Persistent fake echo".to_string()
                 };
