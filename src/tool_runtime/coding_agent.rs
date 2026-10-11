@@ -1788,7 +1788,6 @@ fn observe_projection(
         "history_lost": observation.history_lost || reset,
         "first_retained_sequence": observation.first_retained_sequence,
         "terminal": terminal_projection(run),
-        "recovery_kind": run_recovery_kind(run),
     })
 }
 
@@ -1815,17 +1814,6 @@ fn terminal_projection(run: &CodingAgentRunSnapshot) -> Value {
             })
         })
         .unwrap_or(Value::Null)
-}
-
-fn run_recovery_kind(run: &CodingAgentRunSnapshot) -> &'static str {
-    match run.state {
-        CodingAgentRunState::Starting | CodingAgentRunState::Running => "reobserve",
-        CodingAgentRunState::WaitingPermission => "wait",
-        CodingAgentRunState::Lost => "reconcile",
-        CodingAgentRunState::Completed
-        | CodingAgentRunState::Failed
-        | CodingAgentRunState::Cancelled => "none",
-    }
 }
 
 fn coding_agent_project_not_writable_result(run_id: &str) -> ToolResult {
@@ -2164,18 +2152,71 @@ mod tests {
     }
 
     #[test]
-    fn terminal_not_started_run_does_not_advertise_retry_same() {
-        let mut binding = test_server_binding(
-            "wc_agent_run_failed_not_started".to_string(),
+    fn successful_observe_projection_satisfies_schema_without_recovery_kind() {
+        let schema = webcodex_tool_contracts::output_schema_for_tool("observe_coding_agent");
+        let failure = serde_json::json!({
+            "success": false,
+            "error": "observation token is invalid or belongs to another Run",
+            "output": {
+                "error_kind": "invalid_observation_token",
+                "run_id": "wc_agent_run_token",
+                "execution_state": "started",
+                "recovery_kind": "fix_input"
+            }
+        });
+        webcodex_tool_contracts::test_support::validate_schema_instance(&failure, &schema)
+            .expect("failed observations keep recovery_kind");
+
+        let tokens = CodingAgentServerState::default();
+        let states = [
+            CodingAgentRunState::Starting,
+            CodingAgentRunState::Running,
+            CodingAgentRunState::WaitingPermission,
+            CodingAgentRunState::Completed,
             CodingAgentRunState::Failed,
-            1,
-        );
-        binding.snapshot.execution_state = CodingAgentExecutionState::NotStarted;
-        assert_eq!(
-            run_recovery_kind(&binding.snapshot),
-            "none",
-            "a retained terminal Run cannot be redispatched by replaying the same idempotency key"
-        );
+            CodingAgentRunState::Cancelled,
+            CodingAgentRunState::Lost,
+        ];
+        for state in states {
+            let mut binding =
+                test_server_binding(format!("wc_agent_run_{}", state.as_str()), state.clone(), 1);
+            if state == CodingAgentRunState::Failed {
+                binding.snapshot.execution_state = CodingAgentExecutionState::NotStarted;
+            }
+            let output = observe_projection(
+                CodingAgentObserveResult {
+                    run: binding.snapshot,
+                    events: Vec::new(),
+                    first_retained_sequence: 1,
+                    next_sequence: 0,
+                    has_more: false,
+                    history_lost: state.terminal(),
+                },
+                &tokens,
+                false,
+            );
+            assert!(
+                output.get("recovery_kind").is_none(),
+                "{} must not publish failure recovery on a successful observation: {output}",
+                state.as_str()
+            );
+            let envelope = serde_json::json!({
+                "success": true,
+                "output": output,
+            });
+            webcodex_tool_contracts::test_support::validate_schema_instance(&envelope, &schema)
+                .unwrap_or_else(|error| panic!("{}: {error}", state.as_str()));
+            let mut forbidden = envelope;
+            forbidden["output"]["recovery_kind"] = serde_json::json!("reobserve");
+            assert!(
+                webcodex_tool_contracts::test_support::validate_schema_instance(
+                    &forbidden, &schema
+                )
+                .is_err(),
+                "{} success must keep rejecting a present recovery_kind",
+                state.as_str()
+            );
+        }
     }
 
     #[test]
@@ -2676,7 +2717,7 @@ mod tests {
         assert_eq!(terminal.output["state"], "completed");
         assert_eq!(terminal.output["execution_state"], "completed");
         assert_eq!(terminal.output["history_lost"], true);
-        assert_eq!(terminal.output["recovery_kind"], "none");
+        assert!(terminal.output.get("recovery_kind").is_none());
         assert_eq!(
             runtime
                 .coding_agent_runs
@@ -2805,7 +2846,7 @@ mod tests {
         assert_eq!(lost.output["state"], "lost");
         assert_eq!(lost.output["execution_state"], "outcome_unknown");
         assert_eq!(lost.output["history_lost"], true);
-        assert_eq!(lost.output["recovery_kind"], "reconcile");
+        assert!(lost.output.get("recovery_kind").is_none());
         assert_eq!(
             runtime
                 .coding_agent_runs
@@ -2863,7 +2904,7 @@ mod tests {
         assert_eq!(pre_prompt_terminal.output["state"], "failed");
         assert_eq!(pre_prompt_terminal.output["execution_state"], "not_started");
         assert_eq!(pre_prompt_terminal.output["history_lost"], true);
-        assert_eq!(pre_prompt_terminal.output["recovery_kind"], "none");
+        assert!(pre_prompt_terminal.output.get("recovery_kind").is_none());
 
         let mut live_unknown = owned_snapshot(
             "wc_agent_run_live_outcome_unknown",
