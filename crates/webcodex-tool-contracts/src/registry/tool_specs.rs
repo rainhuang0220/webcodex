@@ -94,17 +94,17 @@ pub fn exact_manifest_specialist_tool_specs() -> Vec<ToolSpec> {
 /// Goal Plan observation/synchronization contract. The single App-only tool is
 /// explicitly effectful: Server-owned stall revalidation may atomically create
 /// one durable Attention/Wake before returning the final bounded projection.
-pub fn goal_plan_app_tool_specs() -> Vec<ToolSpec> {
-    vec![tool_spec(
+pub fn goal_plan_app_tool_descriptors() -> Vec<ToolDescriptor> {
+    vec![tool_descriptor(
         "sync_goal_plan",
         "App-only exact Goal Plan synchronization from the current Host Window. Accepts only goal_id; re-authorizes the Goal, recomputes bounded activity, and when inactivity is authoritatively eligible reuses the Server-owned Session/Window/Project/revision/request/coverage fences to atomically create at most one durable Attention/Wake per meaningful-work epoch before returning the final bounded projection. It never dispatches a Host turn directly.",
     )]
 }
 
 /// Presentation App artifact reads; canonical definitions stay ModelHidden.
-pub fn artifact_app_tool_specs() -> Vec<ToolSpec> {
+pub fn artifact_app_tool_descriptors() -> Vec<ToolDescriptor> {
     vec![
-        tool_spec(
+        tool_descriptor(
             "read_app_artifact_chunk",
             "App-only generic read of one 512 KiB Host-facing segment from an exact authorized Project/path/size/SHA-256 artifact version selected by a presentation App. Rechecks Project ownership, path policy and Runner capability on every read; binary bytes use private MCP metadata only. A changed version fails closed. The segment remains below the observed ChatGPT App delivery cliff while reusing the canonical internal artifact transport, and stays format-neutral so PDF, DOCX, PPTX and other renderers can share it.",
         ),
@@ -114,21 +114,21 @@ pub fn artifact_app_tool_specs() -> Vec<ToolSpec> {
 /// Work Result App primitives. Canonical definitions stay ModelHidden; only the
 /// MCP Apps adapter projects live refresh, bounded Window collaboration, closeout
 /// sealing, and frozen lazy diff reads.
-pub fn work_result_app_tool_specs() -> Vec<ToolSpec> {
+pub fn work_result_app_tool_descriptors() -> Vec<ToolDescriptor> {
     vec![
-        tool_spec(
+        tool_descriptor(
             "get_work_result_state",
             "App-only exact Work Result refresh: reauthorizes Project and optional Session; never consumes attention or records a Session. Returns Window activity/collaboration, Session evidence and an existing final-changes snapshot sealed by finish_coding_task; never creates/replaces it. files reads advertised immutable paths as diff, UTF-8 content (view=content, 32 KiB/page, 256 KiB/file), or PDF (view=pdf, 128 KiB/page, 20 MiB/file). byte_offset selects a bounded segment of the pinned blob; PDF bytes use private MCP App metadata webcodex/pdfChunk. Missing/stale snapshots require explicit file refresh; retry preserves the exact snapshot/path/offset.",
         ),
-        tool_spec(
+        tool_descriptor(
             "read_work_result_activity_detail",
             "Work Result App-only lazy detail read for one completed call identified by server_trace_id in the current canonical Host Window. The Window identity comes only from Host sideband; every read re-authorizes runtime visibility, returns bounded sanitized timing/correlation metadata, grants no authority, and never records the expansion as Window or Session activity.",
         ),
-        tool_spec(
+        tool_descriptor(
             "send_work_result_message",
             "Work Result App-only Operator-to-Window message. Routes to the current stable ClientWindow, never a Session or peer sender. Project authorization and session:collaborate scope are required; optional session_id is exact, visible, explicitly linked context only. Stores a bounded durable message without consuming model attention or creating a Session. Retry uncertain results with the same delivery_key and payload; conflicting reuse is rejected.",
         ),
-        tool_spec(
+        tool_descriptor(
             "read_changed_file_diff",
             "Work Result App-only bounded lazy read of one advertised path from the card's sealed final snapshot. Re-authorizes exact project + session, validates caller/snapshot/path binding, grants no authority, and never records the click into the target Session.",
         ),
@@ -138,37 +138,37 @@ pub fn work_result_app_tool_specs() -> Vec<ToolSpec> {
 /// Fixed MCP App Host-continuation coordination contract. Definitions remain
 /// globally ModelHidden and deliberately stay outside the generic Stateless
 /// operator-extension universe: only the MCP Apps adapter may project them.
-pub fn agent_continuation_app_tool_specs() -> Vec<ToolSpec> {
+pub fn agent_continuation_app_tool_descriptors() -> Vec<ToolDescriptor> {
     vec![
-        tool_spec(
+        tool_descriptor(
             "get_agent_wait_state",
             "App-only exact read of one caller-owned durable AgentWait. SQLite is authoritative; this polling call creates no Wake, changes no Wait lifecycle, grants no source authority, and must not count as meaningful Window activity.",
         ),
-        tool_spec(
+        tool_descriptor(
             "bind_agent_continuation",
             "App-only bind of one live View to one exact current Durable Agent Endpoint generation. Supply a stable binding_id generated by the View using 128 secure random bits (wc_host_binding_ plus canonical base64url-no-pad of 16 random bytes). It is the iframe/process-instance fence, never authority. Re-authorizes communication:manage on every call. Normal first bind requires the current process attachment; after Server restart, recovery remains limited to the exact durable binding fingerprint or a canonical Host ClientWindow continuity identity carried outside tool input. Retry a lost response with the same exact binding_id renews without revoking claims or resetting dispatch; a same-Window refreshed iframe may replace its older fence. A different Host Window, stale generation, expired Endpoint, or foreign principal fails closed. No durable continuation truth is created.",
         ),
-        tool_spec(
+        tool_descriptor(
             "recover_agent_continuation_endpoint",
             "App-only idempotent probe+replacement for one exact expired Durable Agent Endpoint. The stale Agent/Endpoint/generation and iframe binding_id are explicit, while same-Window authority comes only from the canonical Host ClientWindow sideband and cannot be self-asserted in tool input. A still-live controller is a no-op. Only natural expiry with matching durable Window continuity may atomically create generation+1; replay returns that same replacement and a different Window or already-successor controller fails closed.",
         ),
-        tool_spec(
+        tool_descriptor(
             "get_agent_continuation_state",
             "App-only exact Host heartbeat and sparse authoritative continuation-state refresh. Renews only the current exact Endpoint/View binding; stale Views fail closed.",
         ),
-        tool_spec(
+        tool_descriptor(
             "acquire_agent_continuation_wake",
             "App-only pre-fence acquire through the existing durable Wake claim state machine. Returns bounded safe identity only; claim fences and consume tokens remain private.",
         ),
-        tool_spec(
+        tool_descriptor(
             "prepare_agent_continuation_wake",
             "App-only crossing of the existing durable dispatch fence immediately before one Host ui/message attempt. Success returns the bounded exact automatic_message in structuredContent.output.app_protocol for this View only, including the one-shot consume token; never copy it to a card, model tool result, or generic context update. Custom ToolResult _meta is not required. Send exactly one ui/message for that Attempt. A timeout or missing/malformed successful envelope may already be post-fence: reconcile state and finish as delivery_unknown, never blindly retry prepare or dispatch.",
         ),
-        tool_spec(
+        tool_descriptor(
             "finish_agent_continuation_wake",
             "App-only record of ui/message dispatch acceptance or conservative post-fence delivery uncertainty. Dispatch acceptance never means model resumed; only exact consume_agent_wake proves the continuation turn ran.",
         ),
-        tool_spec(
+        tool_descriptor(
             "unbind_agent_continuation",
             "App-only best-effort withdrawal of one exact process-local View binding. Stale teardown cannot withdraw a replacement View; durable Wake reconciliation remains owned by the existing Endpoint/Wake state machine.",
         ),
@@ -177,29 +177,64 @@ pub fn agent_continuation_app_tool_specs() -> Vec<ToolSpec> {
 
 /// Fixed Job-native MCP App Host-continuation coordination contract. Definitions remain
 /// globally ModelHidden; only a UI-capable MCP adapter may project these five tools.
-pub fn job_terminal_continuation_app_tool_specs() -> Vec<ToolSpec> {
+pub fn job_terminal_continuation_app_tool_descriptors() -> Vec<ToolDescriptor> {
     vec![
-        tool_spec(
+        tool_descriptor(
             "bind_job_terminal_continuation",
             "App-only bind of one live View to one exact caller-owned Job terminal wait. ClientWindow arrives only from Host sideband; binding_id is a process/View fence, never Job authority.",
         ),
-        tool_spec(
+        tool_descriptor(
             "get_job_terminal_continuation_state",
             "App-only bounded state read for one exact current Job terminal binding. Polling is View-internal and never substitutes for model-facing Job observation.",
         ),
-        tool_spec(
+        tool_descriptor(
             "prepare_job_terminal_continuation",
             "App-only crossing of the existing durable pending-to-prepared Job terminal delivery fence. Returns one bounded private automatic_message and exact attempt_id; never blindly retry after a missing or malformed post-fence response.",
         ),
-        tool_spec(
+        tool_descriptor(
             "finish_job_terminal_continuation",
             "App-only record of one prepared Host ui/message dispatch as dispatch_accepted or delivery_unknown. It never proves the fresh model turn already ran and never retries delivery.",
         ),
-        tool_spec(
+        tool_descriptor(
             "unbind_job_terminal_continuation",
             "App-only best-effort withdrawal of one exact process-local Job View binding. Pre-prepare teardown leaves pending recoverable; post-prepare teardown reconciles conservatively to delivery_unknown.",
         ),
     ]
+}
+
+pub fn goal_plan_app_tool_specs() -> Vec<ToolSpec> {
+    goal_plan_app_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
+        .collect()
+}
+
+pub fn artifact_app_tool_specs() -> Vec<ToolSpec> {
+    artifact_app_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
+        .collect()
+}
+
+pub fn work_result_app_tool_specs() -> Vec<ToolSpec> {
+    work_result_app_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
+        .collect()
+}
+
+pub fn agent_continuation_app_tool_specs() -> Vec<ToolSpec> {
+    agent_continuation_app_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
+        .collect()
+}
+
+pub fn job_terminal_continuation_app_tool_specs() -> Vec<ToolSpec> {
+    job_terminal_continuation_app_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
+        .collect()
 }
 
 fn operator_family_descriptors(family: ToolOperatorExtensionFamily) -> Vec<ToolDescriptor> {
@@ -307,7 +342,8 @@ fn tool_descriptor(name: &'static str, description: impl Into<String>) -> ToolDe
     }
 }
 
-pub(super) fn tool_spec(name: &'static str, description: impl Into<String>) -> ToolSpec {
+#[cfg(test)]
+fn tool_spec(name: &'static str, description: impl Into<String>) -> ToolSpec {
     tool_descriptor(name, description).into_spec()
 }
 
@@ -322,12 +358,22 @@ mod tests {
             .into_iter()
             .chain(exact_manifest_specialist_tool_descriptors())
             .chain(stateless_operator_extension_tool_descriptors())
+            .chain(goal_plan_app_tool_descriptors())
+            .chain(artifact_app_tool_descriptors())
+            .chain(work_result_app_tool_descriptors())
+            .chain(agent_continuation_app_tool_descriptors())
+            .chain(job_terminal_continuation_app_tool_descriptors())
             .collect::<Vec<_>>();
         assert_eq!(take_tool_materialization_counts_for_test(), (0, 0));
         let specs = registered_tool_specs()
             .into_iter()
             .chain(exact_manifest_specialist_tool_specs())
             .chain(stateless_operator_extension_tool_specs())
+            .chain(goal_plan_app_tool_specs())
+            .chain(artifact_app_tool_specs())
+            .chain(work_result_app_tool_specs())
+            .chain(agent_continuation_app_tool_specs())
+            .chain(job_terminal_continuation_app_tool_specs())
             .collect::<Vec<_>>();
         assert_eq!(descriptors.len(), specs.len());
         for (descriptor, spec) in descriptors.iter().zip(&specs) {

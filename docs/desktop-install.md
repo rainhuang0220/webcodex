@@ -9,6 +9,13 @@ OpenAI Secure Tunnel is the recommended path**. WebCodex Desktop runs the local
 Server and Runner; you send coding requests from **ChatGPT Web**. You do not
 need a public WebCodex endpoint, reverse proxy, or ChatGPT OAuth configuration.
 
+This guide covers the published Desktop artifact path, including v0.4.6 Windows
+x64/arm64 setup `.exe` and macOS Intel/Apple Silicon `.dmg` files. For
+version-specific commands and UI, use the [v0.4.6 guide](https://github.com/yyjeqhc/webcodex/blob/v0.4.6/docs/desktop-install.md).
+The current development unified NSIS/`.pkg`/`.deb` workflow is documented in
+[Unified installation](unified-installation.md) and [Deployment validation](unified-deployment-validation.md);
+its pending native acceptance is separate from published Desktop artifacts.
+
 ## Complete quick start
 
 Before starting, prepare:

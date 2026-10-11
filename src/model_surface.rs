@@ -10,9 +10,12 @@ use crate::tool_runtime::tool_definition::{
     adaptive_runtime_direct_tool_definitions, is_adaptive_runtime_direct_tool,
     is_model_visible_tool_name,
 };
-use crate::tool_runtime::{registered_tool_specs, ToolResult, ToolSpec};
+use crate::tool_runtime::ToolResult;
+#[cfg(test)]
+use crate::tool_runtime::{registered_tool_specs, ToolSpec};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use webcodex_tool_contracts::registry::{registered_tool_descriptors, ToolDescriptor};
 
 pub(crate) const ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME: &str = "call_runtime_tool";
 pub(crate) const TOOL_SURFACE_AVAILABILITY_DIRECT: &str = "direct";
@@ -448,22 +451,31 @@ pub(crate) fn effective_mcp_compact_schemas(configured_override: Option<bool>) -
     configured_override.unwrap_or(true)
 }
 
-/// Direct ToolSpecs ordered by rank declared on canonical ToolDefinitions.
-pub(crate) fn adaptive_runtime_direct_tool_specs() -> Vec<ToolSpec> {
-    let mut by_name: std::collections::HashMap<String, ToolSpec> = registered_tool_specs()
-        .into_iter()
-        .map(|spec| (spec.name.clone(), spec))
-        .collect();
+/// Schema-free direct inventory ordered by canonical ToolDefinition rank.
+pub(crate) fn adaptive_runtime_direct_tool_descriptors() -> Vec<ToolDescriptor> {
+    let mut by_name: std::collections::HashMap<String, ToolDescriptor> =
+        registered_tool_descriptors()
+            .into_iter()
+            .map(|spec| (spec.name.clone(), spec))
+            .collect();
     adaptive_runtime_direct_tool_definitions()
         .into_iter()
         .map(|definition| {
             by_name.remove(definition.name).unwrap_or_else(|| {
                 panic!(
-                    "{} adaptive_runtime direct tool is missing a registered ToolSpec",
+                    "{} adaptive_runtime direct tool is missing a registered descriptor",
                     definition.name
                 )
             })
         })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn adaptive_runtime_direct_tool_specs() -> Vec<ToolSpec> {
+    adaptive_runtime_direct_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
         .collect()
 }
 

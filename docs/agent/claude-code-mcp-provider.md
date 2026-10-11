@@ -75,12 +75,14 @@ provider routing. That routing path does not discover, map, or call Claude's
 `Read` tool.
 
 Claude tools remain an agent-internal implementation detail. WebCodex builds
-its public MCP `tools/list`, runtime registry, OAuth policy, and OpenAPI from
-the static WebCodex tool definitions only. Claude `tools/list` output is never
+its public MCP `tools/list`, runtime registry, and OAuth policy from the static
+WebCodex tool definitions only. The retired GPT Actions/OpenAPI adapter is not
+part of the current public surface; see the [compatibility policy](../compatibility-policy.md).
+Claude `tools/list` output is never
 inserted into those registries. A Claude upgrade may therefore add `Read`,
 `Bash`, `Write`, `Edit`, or other names to provider discovery without making
 any of them visible to an external WebCodex client. Public names and input
-schemas, including `write_project_file` and `edit_project_files`, are identical
+schemas, including `read_files` and `edit_project_files`, are identical
 with the provider disabled or enabled.
 
 The bounded version reported by MCP `initialize.serverInfo` is exposed in
@@ -138,7 +140,7 @@ The latest bounded result is exposed as `tool_providers.config_reload`
 (`generation`, result/error code, and restart-required summary). Generation
 starts at 1 and advances only after a valid reload. `project-registry/*.toml` keeps
 its existing independent cache refresh. Reload does not change public MCP
-tools, refresh MCP metadata, or add an OpenAPI operation.
+tool inventory or refresh Host MCP metadata.
 
 The opt-in process-level smoke exercises the real Server-to-Agent dispatch and
 Unix signal path:

@@ -94,7 +94,7 @@ pub(crate) use runner_skills::{
     handle_runner_skill_request, run_skill_resource_with_profiles_and_execution_state,
 };
 #[cfg(windows)]
-pub(crate) use shell::run_windows_native_single_file_search_with_profiles;
+pub(crate) use shell::run_windows_native_search_with_profiles;
 #[cfg(test)]
 pub(crate) use shell::{
     cwd_allowed, run_shell, run_shell_with_profiles, PreparedShellProfileCache,

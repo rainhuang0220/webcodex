@@ -99,18 +99,18 @@
           "check_id": "elicitation-sep1034-general",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named elicitation reference tool that is absent from the product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "4c1de6d2b28a6200cceed44bd59e428e478e7887e404d14f6b9bc2888c87d8ab"
+          "evidence_sha256": "edcfb84b349262485407dbd0894322772df2c8134b16963ea044a54fa71111e1"
         },
         {
           "scenario": "elicitation-sep1330-enums",
           "check_id": "elicitation-sep1330-general",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named elicitation reference tool that is absent from the product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "f474b573143cfffd3130f0259e2105718e38ff5f92baff981098ca8e8f03dc5d"
+          "evidence_sha256": "8c0868bf426101c3735c06625dcb1df9803d78be869fa93a1f7301afeed624e9"
         },
         {
           "scenario": "resources-read-binary",
@@ -144,81 +144,81 @@
           "check_id": "tools-call-audio",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "be8f81e64007ce6377f1411fa0a5de04e0eab43ada9f6ea73cda249248ed50d6"
+          "evidence_sha256": "97924223c7bc7683fca8cf5d414ab69a7c1f33f702d07014f3dd06db661a0b35"
         },
         {
           "scenario": "tools-call-elicitation",
           "check_id": "tools-call-elicitation",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "5d4f1dbc94d17705be569e9277db7775d03cb4acde367cb363d3f0bfe39191a8"
+          "evidence_sha256": "722f678e482b1537a9936a914a1fab4e725754b748e56190c18136b8bdf2a77a"
         },
         {
           "scenario": "tools-call-embedded-resource",
           "check_id": "tools-call-embedded-resource",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "f98e835b12539be49dfac66428b261a968f0ee7e4e16accb0c37307aa7297dfd"
+          "evidence_sha256": "b58d63779f2837ec1e3d9bc5710e9d93adec0de099776ccd9cc65f86e08a3e9e"
         },
         {
           "scenario": "tools-call-error",
           "check_id": "tools-call-error",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "54ba7e7e08aec6f6d17ca71a1de47bdc699112296e1bf0065b7d08ac9736f545"
+          "evidence_sha256": "a41a824882ebc1b0f4521ffaf5671846bcfcaa22b2d7682c1ad0a94a1ad55bba"
         },
         {
           "scenario": "tools-call-image",
           "check_id": "tools-call-image",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "bfc273da83ca13f3deabc48b80b18006b8eb3b58bf4a3058fae5a2dcc26885b2"
+          "evidence_sha256": "30e5cb678e65274e19a7e061b38d957881c6b9061dc4fad3ac20bde07284130e"
         },
         {
           "scenario": "tools-call-mixed-content",
           "check_id": "tools-call-mixed-content",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "3debe81b45d33edf2334e98203b9f5d553169b8770ea1b0c95e9249f29980f57"
+          "evidence_sha256": "fbf34979e282717b805c78d513ff752de32977b6de1c6c9ac1feb6425cf207bf"
         },
         {
           "scenario": "tools-call-sampling",
           "check_id": "tools-call-sampling",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "aa21f825ed5b37e5d10925e793b8b392d1950c197c0777593409b13a3042d90c"
+          "evidence_sha256": "412261d660ac3fbf5a8d155849513818e3a5701363638a00628f9e873e6d870d"
         },
         {
           "scenario": "tools-call-simple-text",
           "check_id": "tools-call-simple-text",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "0c21f91625708019e412bd79df069d8b314e029e48159b1e8949256726ca1a1b"
+          "evidence_sha256": "1e946f43bf8983b00e395ef3ee0640cfb4ded254aa29a32ea5436f45e4724dd5"
         },
         {
           "scenario": "tools-call-with-progress",
           "check_id": "tools-call-with-progress",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "2d39e73bd3f5f229ed274196b53b1821a4e1450221413a8f20205bd6aa30294f"
+          "evidence_sha256": "cfb43c693cef05e2f4bf28c5f8e08f4ed9960ce131c1c6df645bb57afd2df67b"
         }
       ],
       "expected_server_capabilities": {
@@ -319,45 +319,45 @@
           "check_id": "sep-2322-elicitation-incomplete",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "dde92c084202a933ad8eb9540e443c7d9f79b67f6697bdb7974538f2c1ee49dd"
+          "evidence_sha256": "6e9d7bb8e74b98fdc99c087e0e0be252efd043ffe8c543a73d3491a16ce1cca0"
         },
         {
           "scenario": "input-required-result-basic-list-roots",
           "check_id": "sep-2322-list-roots-incomplete",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "831435f26c7cea0652d2b14265a87dbe6fec2c90e24871d91c411ea63540a255"
+          "evidence_sha256": "157072df48499d58253eeea1aec8ce4015937ae4ed1b86205ef8f74c046292a6"
         },
         {
           "scenario": "input-required-result-basic-sampling",
           "check_id": "sep-2322-sampling-incomplete",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "2d3ac62d261efc2fde999af907538873cdefdff93f2e39493fe3436fdc0ab878"
+          "evidence_sha256": "8ab6bf55a949622ea77fadb848fe9c24e0ee484fc75c117062fa0c3b6ad796cf"
         },
         {
           "scenario": "input-required-result-capability-check",
           "check_id": "sep-2322-respect-client-capabilities",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "57800b7508688887621c6daad35995c15b08c69d9e7c89259ba068b409c9f537"
+          "evidence_sha256": "db5ea232361364926047b40e28474b5406629c92ca0f4a8088e2d6abe6a6ee93"
         },
         {
           "scenario": "input-required-result-ignore-extra-params",
           "check_id": "sep-2322-ignore-unexpected-params",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "WARNING",
-          "evidence_sha256": "82f74a7a2b8887cb4fee313deb30ce18d85174da7e593d874994963543c7d0c8"
+          "evidence_sha256": "ef76ce338c546049b517ff06ac4c9c3610ae01ae2e024c4728ec5175a2c58b80"
         },
         {
           "scenario": "input-required-result-missing-input-response",
@@ -382,27 +382,27 @@
           "check_id": "sep-2322-multiple-inputs-incomplete",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "fad902318cc8dc8b423e197dc14202a10ff1dc3d2c982d2c3afbd5a409ce03a8"
+          "evidence_sha256": "0515c165959fa8fb270cc89a86448594fd88f69606a86036bc30016e66f664fc"
         },
         {
           "scenario": "input-required-result-request-state",
           "check_id": "sep-2322-request-state-incomplete",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "04fb779c07be2f86c192227a723be28da797fbddc438de11150c98b9a4b941c5"
+          "evidence_sha256": "83f5b648a1f623a824877c52ccfc805ec0a27dee06cdfab054ffe09f7832a5a3"
         },
         {
           "scenario": "input-required-result-result-type",
           "check_id": "sep-2322-result-type-included",
           "classification": "missing_harness_fixture",
           "reason": "The SEP-2322 scenario requires a named diagnostic/reference tool; this baseline fixture does not yet inject conformance-only tools.",
-          "evidence": "Pinned SEP-2322 conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "dde92c084202a933ad8eb9540e443c7d9f79b67f6697bdb7974538f2c1ee49dd"
+          "evidence_sha256": "6e9d7bb8e74b98fdc99c087e0e0be252efd043ffe8c543a73d3491a16ce1cca0"
         },
         {
           "scenario": "input-required-result-tampered-state",
@@ -454,9 +454,9 @@
           "check_id": "sep-2575-http-server-no-independent-requests-on-stream",
           "classification": "missing_harness_fixture",
           "reason": "The check explicitly requires a named diagnostic tool that the product registry does not expose.",
-          "evidence": "Pinned server-stateless diagnostic fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "eacbd580553ba4cc16ee1da640adfcda21f5c985be81ad6982abf9e9178b0daa"
+          "evidence_sha256": "9618237b65aedf2f4c487f602e34f899837dc71ff3321233db15080ee9351cf8"
         },
         {
           "scenario": "server-stateless",
@@ -472,18 +472,18 @@
           "check_id": "sep-2575-server-no-log-without-loglevel",
           "classification": "missing_harness_fixture",
           "reason": "The check explicitly requires a named diagnostic tool that the product registry does not expose.",
-          "evidence": "Pinned server-stateless diagnostic fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "87f775fec399ceac2a04be34fa0cbee305db329827dab5657c7bd6cd59256aa1"
+          "evidence_sha256": "927980023094a2ed469f31b238379718ce021159948c8c6d8ccaff733ba232ab"
         },
         {
           "scenario": "server-stateless",
           "check_id": "sep-2575-server-rejects-undeclared-capability",
           "classification": "missing_harness_fixture",
           "reason": "The check explicitly requires a named diagnostic tool that the product registry does not expose.",
-          "evidence": "Pinned server-stateless diagnostic fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "842a4d09036e914bbee9506206df43957359819fe584752baa7a501fb902f510"
+          "evidence_sha256": "f8634f7d05c2c1faba2ffcfc43de7a45173e4e48fc5f825c2c1621a07341daef"
         },
         {
           "scenario": "server-stateless",
@@ -535,63 +535,63 @@
           "check_id": "tools-call-audio",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "167f7b2aab138f5d58a6457f8e54999f72052e4f181ea8e097b591fe6e0e5fd5"
+          "evidence_sha256": "f052de39d5f3a256187a206f6e228591ac6071e99021c059eb933a367a6df2d5"
         },
         {
           "scenario": "tools-call-embedded-resource",
           "check_id": "tools-call-embedded-resource",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "ac15296fe2e3933a0209672765932a60179614b53a6caa779b0fb2e083bdd1a7"
+          "evidence_sha256": "8a37171f598a008c173c60b88b80d6ef4275cdd2ee12e509c4999f513ae2e406"
         },
         {
           "scenario": "tools-call-error",
           "check_id": "tools-call-error",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "8ba320ddcc338989d004655f45941840957cddac5a7560a640dbec4f57dfa150"
+          "evidence_sha256": "9cab110d95caf72a3e334a2150d58f54926a4ce6630a77c7f88afc55ca83ecbc"
         },
         {
           "scenario": "tools-call-image",
           "check_id": "tools-call-image",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "f4c2a05b2a65479571b00cb56f4296afa3421cc093fd6a3e6ae6eb38081b3485"
+          "evidence_sha256": "4fbb86de26bae1e2947c7e1967085f35580aae0323dee7d28977b6be0f983716"
         },
         {
           "scenario": "tools-call-mixed-content",
           "check_id": "tools-call-mixed-content",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "4ac779b4d23b386d9db3448b3420722a1c825e8e09dfefc48312317894aecb4b"
+          "evidence_sha256": "886f6caf72f73c3ee7a57a4dcf83823baac7230ef0c1d287223cbf95996e91d5"
         },
         {
           "scenario": "tools-call-simple-text",
           "check_id": "tools-call-simple-text",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "7ce39ec311288ca86a4ee842f9ee7946344a8563845ff2c5220936a147870a40"
+          "evidence_sha256": "412a2db52f1aafe96953c073de548b2a28eb68be6f714cbfc46010e5f5b0a3eb"
         },
         {
           "scenario": "tools-call-with-progress",
           "check_id": "tools-call-with-progress",
           "classification": "missing_harness_fixture",
           "reason": "The upstream scenario requires a named reference test tool that WebCodex intentionally does not expose in its product registry.",
-          "evidence": "Pinned conformance scenario fixture contract; first GitHub Actions conformance baseline raw report",
+          "evidence": "Reviewed CI runs 38131804980 and 38134598087: restoring only the former unknown-tool diagnostic reproduces the previous evidence hash; status, classification and protocol behavior are unchanged.",
           "expected_status": "FAILURE",
-          "evidence_sha256": "2b1644e2f5310a0794eb4fa3718b9a98c8609c1255c92224fd34e4178bd88934"
+          "evidence_sha256": "218f22612e96df4433aa58f8a7800cbd7d84dc12fe857aeb70234ccc80063dfe"
         }
       ],
       "expected_server_capabilities": {

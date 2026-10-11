@@ -21,6 +21,9 @@ pub use tool_specs::{
 #[cfg(any(test, feature = "root-test-support"))]
 pub use tool_specs::take_tool_materialization_counts_for_test;
 pub use tool_specs::{
-    exact_manifest_specialist_tool_descriptors, registered_tool_descriptors,
-    stateless_operator_extension_tool_descriptors, ToolDescriptor,
+    agent_continuation_app_tool_descriptors, artifact_app_tool_descriptors,
+    exact_manifest_specialist_tool_descriptors, goal_plan_app_tool_descriptors,
+    job_terminal_continuation_app_tool_descriptors, registered_tool_descriptors,
+    stateless_operator_extension_tool_descriptors, work_result_app_tool_descriptors,
+    ToolDescriptor,
 };

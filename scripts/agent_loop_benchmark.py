@@ -31,6 +31,14 @@ except ModuleNotFoundError:
 STATUS_VALUES = frozenset(("pass", "fail", "partial", "unsupported"))
 DEFAULT_CASES = ("readonly_review", "guarded_multi_file_edit", "long_validation_handoff")
 VARIANTS = ("direct", "code_mode")
+# Selected, already-persisted metadata only. Model turns and raw payloads cannot
+# be reconstructed from Agent Loop summaries.
+PAIRED_DELTA_METRICS = (
+    "task_wall_time_ms",
+    "outer_calls.total",
+    "results.serialized_tool_result_bytes.total",
+    "repair_turns.total",
+)
 MAX_DRIVER_RECEIPT_BYTES = 64 * 1024
 MAX_FIXTURE_ORACLE_BYTES = 1024 * 1024
 MAX_CASE_MANIFEST_BYTES = 1024 * 1024
@@ -910,6 +918,59 @@ def _comparison(direct: dict[str, Any], code_mode: dict[str, Any]) -> dict[str, 
     return report.compare_reports(direct["summary"], code_mode["summary"])
 
 
+def _paired_delta_summary(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe deltas only from correctness-qualified Direct/Code Mode pairs.
+
+    A metric with incomplete evidence retains its observed count and percentiles,
+    but never reports a complete total. The summary does not imply model turns,
+    complete network payload bytes, or a statistically proven speedup.
+    """
+    qualified = [
+        comparison
+        for pair in pairs
+        if isinstance((comparison := pair.get("comparison")), dict)
+        and isinstance(comparison.get("throughput_compatibility"), dict)
+        and comparison["throughput_compatibility"].get("comparable") is True
+    ]
+    metrics = {}
+    for name in PAIRED_DELTA_METRICS:
+        deltas: list[int] = []
+        for comparison in qualified:
+            rows = comparison.get("metrics")
+            if not isinstance(rows, list):
+                continue
+            matches = [
+                item for item in rows
+                if isinstance(item, dict) and item.get("metric") == name
+            ]
+            if len(matches) != 1:
+                continue
+            value = matches[0]
+            baseline, candidate, delta = (
+                value.get("baseline"), value.get("candidate"), value.get("delta")
+            )
+            if (
+                value.get("comparable") is True
+                and type(baseline) is int
+                and type(candidate) is int
+                and type(delta) is int
+                and delta == candidate - baseline
+            ):
+                deltas.append(delta)
+        distribution = report._metric_distribution(
+            deltas, missing=len(qualified) - len(deltas)
+        )
+        if not qualified:
+            distribution["total"] = None
+        distribution["complete"] = bool(qualified) and distribution["missing"] == 0
+        metrics[name] = distribution
+    return {
+        "qualified_pairs": len(qualified),
+        "excluded_pairs": len(pairs) - len(qualified),
+        "candidate_minus_direct": metrics,
+    }
+
+
 def _pair_order(pair_index: int) -> tuple[str, str]:
     return VARIANTS if pair_index % 2 == 0 else tuple(reversed(VARIANTS))
 
@@ -983,7 +1044,11 @@ def run_benchmark(
                         "comparison": _comparison(by_variant["direct"], by_variant["code_mode"]),
                     }
                 )
-            cases_out.append({"case_id": case["id"], "pairs": pair_outputs})
+            cases_out.append({
+                "case_id": case["id"],
+                "pairs": pair_outputs,
+                "paired_delta_summary": _paired_delta_summary(pair_outputs),
+            })
 
         statuses = [
             sample["status"]
@@ -1006,6 +1071,8 @@ def run_benchmark(
                 "driver-reported unsupported, partial, and failed samples remain in the result",
                 "comparisons reuse agent_loop_report exact base/case fingerprint/correctness gates",
                 "outer-call metrics remain proxies; exact model round trips stay unavailable without Host turn evidence",
+                "paired_delta_summary includes only correctness-qualified pairs; missing metrics are never counted as zero",
+                "paired p50/p95 deltas are descriptive nearest-rank statistics, not confidence intervals or a speedup claim",
             ],
         }
     finally:
@@ -1028,7 +1095,14 @@ def _human_summary(result: dict[str, Any]) -> str:
             if isinstance(pair.get("comparison"), dict)
             and (pair["comparison"].get("throughput_compatibility") or {}).get("comparable") is True
         )
-        lines.append(f"{case['case_id']}: orders={','.join(orders)} comparable_pairs={comparable}/{len(orders)}")
+        summary = case["paired_delta_summary"]
+        wall = summary["candidate_minus_direct"]["task_wall_time_ms"]
+        wall_p50 = wall["p50"] if wall["complete"] else "unavailable"
+        lines.append(
+            f"{case['case_id']}: orders={','.join(orders)} "
+            f"comparable_pairs={comparable}/{len(orders)} "
+            f"paired_wall_p50_delta_ms={wall_p50}"
+        )
     return "\n".join(lines)
 
 

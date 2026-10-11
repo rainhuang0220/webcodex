@@ -159,8 +159,10 @@ Markdown bundle 已提交在单 script App 资源内，纯 Rust 编译不需要 
 该检查同时接入 `check:dist`。
 
 展示调用会保存这条窗口绑定，但不会启动 live Window activity；侧边栏入口和 App
-刷新调用也不会启动 live Window activity。当前界面资源是
-`ui://webcodex/work-result/v17`，旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
+刷新调用也不会启动 live Window activity。新卡片使用当前 descriptor 公布的 Work Result
+资源 URI，其身份由[canonical App registry](../src/mcp/app_registry/builtin.rs)维护。
+刷新 Host schema 并重新打开缓存 reader，以加载当前 thread-panel、lazy-detail 和工具名
+契约；旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
 
 界面展示入口保留默认的 model/App 可见性；App-only 桥接工具只返回数据，不声明
 `ui.resourceUri`。ChatGPT 刷新工具时会拒绝声明界面资源的私有工具。更新 Server
@@ -336,6 +338,13 @@ Adaptive Runtime 可以把常用工具直接暴露，把 long-tail 工具通过 
 
 ### 长任务使用 Job lifecycle
 
+Stateless MCP 2026 的执行工具可通过 `_wc.compact_execution=true` 显式启用紧凑执行结果。
+它将稳定的 `output.execution` 控制事实与 `output.details` 分开（`observe_jobs`
+按条目处理），同时保留日志、恢复和协作义务。只有 `outcome=passed` 才能证明执行成功；
+工具接受请求或成功返回观察结果本身不能证明成功。该选项不会等待或重试命令。
+支持的工具、gateway 放置位置、未知结果及 pending-chain 设计限制见
+[Host execution control](experiments/host-execution-control.md)。
+
 长时间 command 与 validation 使用 canonical WebCodex Job。发起调用返回 exact Job 后，用 `observe_jobs` 观察同一个 Job；只有 Job identity 确实丢失时才用 `list_jobs` 恢复，不要重复启动。Jobs 不再包装成 MCP Tasks，WebCodex 也不再 advertise 原 Connector-specific MCP Tasks extension。
 
 ChatGPT/model turn 与一次 MCP observation request 都不拥有 Job 的生命周期。因此 Host 侧
@@ -390,10 +399,20 @@ stderr、provider stderr 或任意 provider prose。
 
 同一个 ToolRuntime 通过一套 Adaptive Runtime contract 服务单项目、project-scoped 的本地 `share` / `run` 和多项目 hosted Server。project-scoped credential 改变可见性与 authority，不改变 model-facing runtime shape。特定 protocol capability 与 MCP App 可以 admission 额外的 hidden presentation/resource operation，但不会形成第二套 runtime surface。
 
+Stateless MCP 2026 只通过一个可选且封闭的 `_wc` envelope 接收通用、不可信的调用元数据。
+根据工具，它可允许 `record`、`ack`、`ack_ref`、`resolve`、`reply`、`context`、`control`
+和 `compact_execution`。这些仅属于 adapter 元数据，不会成为 canonical ToolCall
+业务参数或授予权限。旧的根级 wrapper（如 `recording_session_id`、
+`ack_session_message_ids`、`ack_ref`、`session_message_resolution`、`window_reply`、
+`context_request` 和 `_control`）在 Stateless 2026 上会被拒绝；其他旧版/非 Stateless
+传输保留各自契约。`call_runtime_tool` 只在外层 gateway 接收 `_wc`；嵌套目标的
+`arguments` 必须是 canonical 业务参数，不能再次包含 `_wc`。
+
 ### 项目级验证
 
-`project_validate` 通过 Runner 上的现有适配器执行 Rust 的格式检查／检查／测试，
-以及 Go 的检查／测试、Python 的 pytest 测试。`scope.packages` 表示 Rust/Go 的有界包范围。
+适配器支持范围、能力准入和副作用以[当前 coding 验证说明](#project-scoped-ordinary-runtime)为准：
+Rust 格式检查／检查／测试、Go 检查／测试、Python pytest 测试和 Ruff 检查／格式检查，
+以及 Node 脚本式检查和受支持的原生 TAP 测试。`scope.packages` 仅用于 Rust/Go 的有界包范围。
 `action="test"` 可使用 `test.filter`：Rust 为一个 libtest 子串，Go 为原生 `-run`
 正则表达式（包含子测试的斜杠语义），Python 为原生 pytest `-k` 表达式，
 上限 200 UTF-8 bytes，拒绝控制字符及选项形状的前缀；并非跨语言统一查询语法。
@@ -410,8 +429,9 @@ Go/Python 保留有意义的空格；空字符串或省略表示不加过滤。
 规划与 Job 准入各检查一次；省略时保持原有行为。完整参数不会变成任意 argv／shell。
 长任务仍观察同一个 Job，不能因 Host 中断而重跑。
 
-构建产物、修改源码的格式化、lint、Node 与其他 Python 生产适配器，以及更广泛的
-workspace/exclude、offline／network 策略由 #962 跟踪；现有 cargo_*、go_test 与显式进程工具保留。
+Rust/Go 构建使用当前 `project_build`；项目级验证不会执行修改源码的格式化。
+更广泛的适配器、workspace/exclude 和 offline／network 策略仍由 #962 跟踪；
+不要将其视为已实现能力。现有 cargo_*、go_test 与显式进程工具保留。
 
 ### ChatGPT 文件桥接
 

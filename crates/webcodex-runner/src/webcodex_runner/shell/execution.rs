@@ -5,6 +5,32 @@ use super::*;
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_configured_command(
     policy: &RunnerPolicy,
+    cmd: Command,
+    cwd_path: &Path,
+    stdin: Option<&str>,
+    timeout_secs: u64,
+    stop_requested: Option<&AtomicBool>,
+    start: Instant,
+    spawn_error_prefix: &str,
+    on_started: Option<&dyn Fn()>,
+) -> ShellCommandResult {
+    execute_configured_command_with_prefix(
+        policy,
+        cmd,
+        cwd_path,
+        stdin,
+        timeout_secs,
+        stop_requested,
+        start,
+        spawn_error_prefix,
+        on_started,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn execute_configured_command_with_prefix(
+    policy: &RunnerPolicy,
     mut cmd: Command,
     cwd_path: &Path,
     stdin: Option<&str>,
@@ -13,6 +39,7 @@ pub(super) fn execute_configured_command(
     start: Instant,
     spawn_error_prefix: &str,
     on_started: Option<&dyn Fn()>,
+    prefix: Option<super::drains::StdoutPrefixLimit>,
 ) -> ShellCommandResult {
     cmd.current_dir(cwd_path)
         .stdout(Stdio::piped())
@@ -48,19 +75,20 @@ pub(super) fn execute_configured_command(
     // lifetime. Starting independent bounded readers before any lifecycle wait
     // prevents either stdout or stderr pipe capacity from throttling the child,
     // even when no caller observes Job logs until terminal completion.
-    let drains = match ContinuousPipeDrain::start(&mut child, policy.max_output_bytes) {
-        Ok(drains) => drains,
-        Err(error) => {
-            let cleanup = terminate_child_process_tree(&mut child).err();
-            return ShellCommandResult::outcome_unknown(CommandResult {
-                exit_code: None,
-                stdout: None,
-                stderr: None,
-                duration_ms: Some(start.elapsed().as_millis() as u64),
-                error: Some(with_cleanup_error(error, cleanup)),
-            });
-        }
-    };
+    let drains =
+        match ContinuousPipeDrain::start_with_prefix(&mut child, policy.max_output_bytes, prefix) {
+            Ok(drains) => drains,
+            Err(error) => {
+                let cleanup = terminate_child_process_tree(&mut child).err();
+                return ShellCommandResult::outcome_unknown(CommandResult {
+                    exit_code: None,
+                    stdout: None,
+                    stderr: None,
+                    duration_ms: Some(start.elapsed().as_millis() as u64),
+                    error: Some(with_cleanup_error(error, cleanup)),
+                });
+            }
+        };
     if let Some(on_started) = on_started {
         on_started();
     }
@@ -87,6 +115,7 @@ pub(super) fn execute_configured_command(
         },
         None => None,
     };
+    let mut output_bounded = false;
     loop {
         if let Err(error) = poll_stdin_writer(&mut stdin_writer) {
             let cleanup = terminate_and_collect_pipes(child, drains).err();
@@ -134,6 +163,10 @@ pub(super) fn execute_configured_command(
                     error: Some(format!("job stopped; failed to collect output: {}", e)),
                 }),
             };
+        }
+        if prefix.is_some() && drains.stdout_limit_reached() {
+            output_bounded = true;
+            break;
         }
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -202,16 +235,32 @@ pub(super) fn execute_configured_command(
             )),
         });
     }
+    let limit_reached = Arc::clone(&drains.stdout_limit_reached);
     match terminate_and_collect_pipes(child, drains) {
         Ok((status, stdout, stderr)) => {
             let (stdout, stdout_truncated) =
                 stdout.normalize_with_truncation(policy.max_output_bytes);
             let (stderr, stderr_truncated) =
                 stderr.normalize_with_truncation(policy.max_output_bytes);
+            // A search prefix limit is the native equivalent of successful
+            // head/SIGPIPE termination. Cleanup failure still fails closed.
+            let output_bounded =
+                output_bounded || prefix.is_some() && limit_reached.load(Ordering::SeqCst);
+            // rg can complete with a genuine search error while the drain is
+            // reaching its cap. Do not turn that known failure into success.
+            let output_bounded = output_bounded && status.code() != Some(2);
             ShellCommandResult::completed(CommandResult {
-                exit_code: Some(status.code().unwrap_or(-1)),
+                exit_code: Some(if output_bounded {
+                    0
+                } else {
+                    status.code().unwrap_or(-1)
+                }),
                 stdout: Some(stdout),
-                stderr: Some(stderr),
+                stderr: Some(if output_bounded {
+                    String::new()
+                } else {
+                    stderr
+                }),
                 duration_ms: Some(start.elapsed().as_millis() as u64),
                 error: None,
             })

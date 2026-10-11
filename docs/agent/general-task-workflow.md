@@ -34,7 +34,7 @@ authority are unchanged.
 
 MCP failure messages omit exact duplicate stdout/stderr tail blocks while preserving their canonical output fields, diagnostics and recovery guidance. HTTP results and retained logs remain available. MCP `observe_jobs` defaults to `summary_only=true`, compacting proven successful validation logs; failures, unknown results and ordinary commands retain evidence. Explicit `summary_only=false` expands from the original observation cursor.
 
-`read_tool_manifest` describes the deployed canonical contract and admitted routes; it does not install Host callables. If ChatGPT has cached older direct definitions, use an admitted gateway fallback where the manifest allows it. MCP App presentation must retain its direct route. New Work Result cards use resource v22; retired resource URIs fail closed.
+`read_tool_manifest` describes the deployed canonical contract and admitted routes; it does not install Host callables. If ChatGPT has cached older direct definitions, use an admitted gateway fallback where the manifest allows it. MCP App presentation must retain its direct route. New Work Result cards use the resource URI advertised by the current descriptor from the [canonical App registry](../../src/mcp/app_registry/builtin.rs); retired resource URIs fail closed, so cached readers must be reopened.
 
 The thread panel uses one continuous page for Changed files and Final changes.
 Each section has a sticky file selector and previous/next controls for its shown

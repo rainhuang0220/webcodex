@@ -1525,6 +1525,71 @@ fn mcp_work_on_project_schema_exposes_managed_worktree_without_internal_operatio
 }
 
 #[test]
+fn mcp_tools_list_compact_materializes_only_authorized_inputs() {
+    use webcodex_tool_contracts::registry::take_tool_materialization_counts_for_test as counts;
+    let admin = crate::auth::AuthContext {
+        scopes: vec![crate::auth::SCOPE_ADMIN.to_string()],
+        is_bootstrap: true,
+        ..crate::auth::AuthContext::new(crate::auth::AuthKind::Bootstrap)
+    };
+    let reader = crate::auth::AuthContext {
+        scopes: vec![crate::auth::SCOPE_PROJECT_READ.to_string()],
+        ..crate::auth::AuthContext::new(crate::auth::AuthKind::OAuth2Token)
+    };
+    for auth in [None, Some(&reader), Some(&admin)] {
+        for stateless in [false, true] {
+            for apps in [false, true] {
+                counts();
+                let mut compact =
+                    mcp_tools_list_payload_with_features_for_auth(true, apps, stateless, auth);
+                let (inputs, outputs) = counts();
+                let tools = compact["tools"].as_array().unwrap();
+                let custom_count = tools
+                    .iter()
+                    .filter(|tool| {
+                        matches!(
+                            tool["name"].as_str(),
+                            Some("work_result_thread_panel" | "search_mentions")
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    outputs, 0,
+                    "compact tools/list must never materialize discarded output schemas"
+                );
+                assert_eq!(
+                    inputs,
+                    tools.len() - custom_count,
+                    "only returned canonical inputs are materialized once"
+                );
+                let mut full =
+                    mcp_tools_list_payload_with_features_for_auth(false, apps, stateless, auth);
+                for tool in full["tools"].as_array_mut().unwrap() {
+                    tool.as_object_mut().unwrap().remove("outputSchema");
+                    crate::mcp::discovery::compact_tool(tool);
+                    if tool["name"] == "list_sessions" && apps && stateless {
+                        // The App-only discovery overlay has an existing explicit
+                        // compact description instead of the canonical full copy.
+                        let expected = tools
+                            .iter()
+                            .find(|entry| entry["name"] == "list_sessions")
+                            .unwrap();
+                        tool["description"] = expected["description"].clone();
+                    }
+                }
+                // App diagnostic fields are appended after the inner renderer;
+                // normalize both as the final tools/list adapter does.
+                for tool in compact["tools"].as_array_mut().unwrap() {
+                    crate::mcp::discovery::compact_tool(tool);
+                }
+                assert_eq!(compact, full, "compact keeps order, scope, inputs, annotations and App metadata: apps={apps}, stateless={stateless}");
+                counts();
+            }
+        }
+    }
+}
+
+#[test]
 fn mcp_tools_list_compact_omits_output_schema_and_preserves_annotations() {
     // Pure renderer with the explicit compact=true switch; the env-adapter
     // path for compact mode is covered end-to-end by

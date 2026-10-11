@@ -40,15 +40,20 @@ do not imply it. The hosted shared-key OAuth bridge can add this scope only via
 an explicit client-provisioning opt-in; existing clients are never widened on
 Server upgrade.
 
-`recording_session_id` is carried by the existing generic stateless recorder
-wrapper rather than duplicated as CodingAgentRun business input. It can attach
+On Stateless MCP 2026, the recorder selector is `_wc.record` in the outer
+invocation envelope, not CodingAgentRun business input. When using
+`call_runtime_tool`, put `_wc` beside `tool` and `arguments`, never inside the
+target business arguments. The old root-level `recording_session_id` is rejected
+on this surface; legacy/non-stateless adapters retain their own contracts.
+See [MCP invocation metadata](../MCP.md#adaptive-runtime-extensions). The authorized
+recorder can attach
 bounded `coding_agent_started`, `coding_agent_waiting_permission`, and
 `coding_agent_terminal` lifecycle evidence to an exact Project-matching
 Workflow Session. Recorder provenance never crosses the Server/Runner execution
 request, never grants Run authority, and never stores prompt/reasoning/tool
 bodies or the private ACP session id.
 
-`coding_agent_start.context_session_id` is a separate explicit recovery source.
+`start_coding_agent.context_session_id` is a separate explicit recovery source.
 It requires independent `runtime:read`, Session ownership and exact Project
 matching before dispatch. It quotes the bounded handoff and separately authorized
 Goal context into the prompt without resuming the source, inferring a recorder,

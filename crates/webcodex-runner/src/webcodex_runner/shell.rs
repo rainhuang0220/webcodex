@@ -186,11 +186,11 @@ pub(crate) use scripts::{
 };
 #[cfg(windows)]
 #[cfg(test)]
-use search::native_single_file_search_spec;
+use search::native_search_spec;
 #[cfg(windows)]
 use search::resolve_windows_internal_posix_interpreter;
 #[cfg(windows)]
-pub(crate) use search::run_windows_native_single_file_search_with_profiles;
+pub(crate) use search::run_windows_native_search_with_profiles;
 
 #[cfg(test)]
 #[path = "shell_tests.rs"]
