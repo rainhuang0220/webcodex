@@ -9,6 +9,13 @@ Desktop 界面支持简体中文、繁體中文（`zh-TW`）、English、日本�
 真正向 AI 发送编程请求的界面是 **ChatGPT 网页版**。第一次使用不需要配置
 公开的 WebCodex 地址、反向代理或 ChatGPT OAuth。
 
+本文覆盖已发布 Desktop 产物路径，包括 v0.4.6 的 Windows x64/arm64 setup `.exe`
+与 macOS Intel/Apple Silicon `.dmg`。版本专属命令和 UI 请使用
+[v0.4.6 指南](https://github.com/yyjeqhc/webcodex/blob/v0.4.6/docs/desktop-install.zh-CN.md)。
+当前开发版的统一 NSIS/`.pkg`/`.deb` 流程见[统一安装](unified-installation.zh-CN.md)
+与[部署验收](unified-deployment-validation.md)；其待完成的原生验收与已发布 Desktop
+产物是独立边界。
+
 ## 完整快速开始
 
 开始前准备好：

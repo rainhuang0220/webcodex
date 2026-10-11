@@ -1,5 +1,174 @@
 use super::*;
 
+#[test]
+fn mcp_extension_route_lookup_preserves_membership_without_schema_materialization() {
+    use webcodex_tool_contracts::registry::{
+        stateless_operator_extension_tool_specs, take_tool_materialization_counts_for_test,
+    };
+    use webcodex_tool_contracts::{
+        runtime_tool_operator_extension_family, tool_definition::tool_definitions,
+    };
+    let names = stateless_operator_extension_tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    for definition in tool_definitions() {
+        assert_eq!(
+            runtime_tool_operator_extension_family(definition.name).is_some(),
+            names.contains(definition.name),
+            "{}",
+            definition.name
+        );
+    }
+    take_tool_materialization_counts_for_test();
+    for name in names
+        .iter()
+        .map(String::as_str)
+        .chain(["read_files", "unknown-tool"])
+    {
+        let ordinary =
+            crate::mcp::tools::adaptive_runtime_gateway_target_admitted_for_test(name, false);
+        let modern =
+            crate::mcp::tools::adaptive_runtime_gateway_target_admitted_for_test(name, true);
+        if names.contains(name) {
+            assert!(!ordinary);
+            assert!(modern);
+        }
+        if name == "unknown-tool" {
+            assert!(!ordinary);
+            assert!(!modern);
+        }
+    }
+    assert_eq!(take_tool_materialization_counts_for_test(), (0, 0));
+}
+
+#[tokio::test]
+async fn mcp_route_recovery_rejects_unavailable_tools_without_gateway_retry() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    for stateless in [false, true] {
+        for name in [
+            "tool_manifest",
+            "runtime_status",
+            "unknown_tool_name",
+            "get_work_result_state",
+        ] {
+            let params = json!({"name": name, "arguments": {}});
+            let params = if stateless {
+                mcp_2026_params(params)
+            } else {
+                params
+            };
+            let outcome =
+                handle_mcp_request(&runtime, rpc("tools/call", Some(json!(8100)), params), None)
+                    .await;
+            let McpOutcome::BadRequest(value) = outcome else {
+                panic!("unavailable tool must be rejected before execution: {name}");
+            };
+            assert_eq!(value["error"]["code"], -32602);
+            let message = value["error"]["message"].as_str().unwrap();
+            assert!(message.contains("unavailable"), "{name}: {message}");
+            assert!(message.contains("tools/list"), "{name}: {message}");
+            assert!(!message.contains("call_runtime_tool"), "{name}: {message}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_route_recovery_suggests_gateway_only_with_current_scope() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    let mut restricted = crate::auth::AuthContext::new(crate::auth::AuthKind::OAuth2Token);
+    restricted.scopes = vec!["runtime:read".to_string()];
+    for stateless in [false, true] {
+        for auth in [None, Some(&restricted)] {
+            let params = json!({"name": "list_projects", "arguments": {}});
+            let params = if stateless {
+                mcp_2026_params(params)
+            } else {
+                params
+            };
+            let outcome =
+                handle_mcp_request(&runtime, rpc("tools/call", Some(json!(8101)), params), auth)
+                    .await;
+            let McpOutcome::BadRequest(value) = outcome else {
+                panic!("gateway-only tool must not execute directly");
+            };
+            assert_eq!(value["error"]["code"], -32602);
+            let message = value["error"]["message"].as_str().unwrap();
+            assert_eq!(
+                message.contains("call_runtime_tool"),
+                auth.is_none(),
+                "{message}"
+            );
+            if auth.is_some() {
+                assert!(message.contains("authorization"), "{message}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_route_recovery_current_discovery_matches_callable_contracts() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    let outcome = handle_mcp_request(
+        &runtime,
+        rpc("tools/list", Some(json!(8102)), mcp_2026_params(json!({}))),
+        None,
+    )
+    .await;
+    let McpOutcome::Ok(value) = outcome else {
+        panic!("expected discovery");
+    };
+    let tools = value["result"]["tools"].as_array().unwrap();
+    for retired in [
+        "tool_manifest",
+        "runtime_status",
+        "apply_text_edits",
+        "session_handoff_summary",
+    ] {
+        assert!(!tools.iter().any(|tool| tool["name"] == retired));
+    }
+    let bootstrap = tools
+        .iter()
+        .find(|tool| tool["name"] == "work_on_project")
+        .unwrap();
+    for retired in [
+        "include_project_instructions",
+        "include_workflow_guidance",
+        "recording_session_id",
+    ] {
+        assert!(bootstrap["inputSchema"]["properties"]
+            .get(retired)
+            .is_none());
+    }
+    assert!(bootstrap["inputSchema"]["properties"].get("_wc").is_some());
+    for (name, arguments) in [
+        ("get_runtime_status", json!({"compact": true})),
+        ("read_tool_manifest", json!({"tool_name": "read_files"})),
+    ] {
+        let descriptor = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        for key in arguments.as_object().unwrap().keys() {
+            assert!(descriptor["inputSchema"]["properties"].get(key).is_some());
+        }
+        let outcome = handle_mcp_request(
+            &runtime,
+            rpc(
+                "tools/call",
+                Some(json!(8103)),
+                mcp_2026_params(json!({"name": name, "arguments": arguments})),
+            ),
+            None,
+        )
+        .await;
+        let McpOutcome::Ok(value) = outcome else {
+            panic!("advertised callable failed: {name}");
+        };
+        assert_eq!(
+            value["result"]["structuredContent"]["success"], true,
+            "{name}: {value}"
+        );
+    }
+}
+
 async fn wait_for_mcp_agent_request(
     registry: &crate::runner_http::RunnerRegistry,
     client_id: &str,
@@ -1353,6 +1522,71 @@ fn mcp_work_on_project_schema_exposes_managed_worktree_without_internal_operatio
     assert!(tools
         .iter()
         .all(|tool| tool["name"] != "prepare_managed_worktree"));
+}
+
+#[test]
+fn mcp_tools_list_compact_materializes_only_authorized_inputs() {
+    use webcodex_tool_contracts::registry::take_tool_materialization_counts_for_test as counts;
+    let admin = crate::auth::AuthContext {
+        scopes: vec![crate::auth::SCOPE_ADMIN.to_string()],
+        is_bootstrap: true,
+        ..crate::auth::AuthContext::new(crate::auth::AuthKind::Bootstrap)
+    };
+    let reader = crate::auth::AuthContext {
+        scopes: vec![crate::auth::SCOPE_PROJECT_READ.to_string()],
+        ..crate::auth::AuthContext::new(crate::auth::AuthKind::OAuth2Token)
+    };
+    for auth in [None, Some(&reader), Some(&admin)] {
+        for stateless in [false, true] {
+            for apps in [false, true] {
+                counts();
+                let mut compact =
+                    mcp_tools_list_payload_with_features_for_auth(true, apps, stateless, auth);
+                let (inputs, outputs) = counts();
+                let tools = compact["tools"].as_array().unwrap();
+                let custom_count = tools
+                    .iter()
+                    .filter(|tool| {
+                        matches!(
+                            tool["name"].as_str(),
+                            Some("work_result_thread_panel" | "search_mentions")
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    outputs, 0,
+                    "compact tools/list must never materialize discarded output schemas"
+                );
+                assert_eq!(
+                    inputs,
+                    tools.len() - custom_count,
+                    "only returned canonical inputs are materialized once"
+                );
+                let mut full =
+                    mcp_tools_list_payload_with_features_for_auth(false, apps, stateless, auth);
+                for tool in full["tools"].as_array_mut().unwrap() {
+                    tool.as_object_mut().unwrap().remove("outputSchema");
+                    crate::mcp::discovery::compact_tool(tool);
+                    if tool["name"] == "list_sessions" && apps && stateless {
+                        // The App-only discovery overlay has an existing explicit
+                        // compact description instead of the canonical full copy.
+                        let expected = tools
+                            .iter()
+                            .find(|entry| entry["name"] == "list_sessions")
+                            .unwrap();
+                        tool["description"] = expected["description"].clone();
+                    }
+                }
+                // App diagnostic fields are appended after the inner renderer;
+                // normalize both as the final tools/list adapter does.
+                for tool in compact["tools"].as_array_mut().unwrap() {
+                    crate::mcp::discovery::compact_tool(tool);
+                }
+                assert_eq!(compact, full, "compact keeps order, scope, inputs, annotations and App metadata: apps={apps}, stateless={stateless}");
+                counts();
+            }
+        }
+    }
 }
 
 #[test]

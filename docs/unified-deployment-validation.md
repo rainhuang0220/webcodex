@@ -2,7 +2,7 @@
 
 [简体中文](#中文)
 
-This checklist records scope and evidence for the unified environment work. The unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installers for x64 and arm64 are defined by this branch’s build pipeline; the six installer variants have not yet received native build/installation acceptance or a unified release. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
+This checklist records scope and evidence for the current v0.5 unified environment work; historical development evidence is labeled separately below. The unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installers for x64 and arm64 are defined by the current development build pipeline; the six installer variants have not yet received native build/installation acceptance or a unified release. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
 
 ## Milestones and scope
 
@@ -10,11 +10,11 @@ This checklist records scope and evidence for the unified environment work. The 
 | --- | --- | --- |
 | M1 | Shared setup core: create/join, project/no-project, identity, recovery, and shared Desktop/CLI setup state | Core tests cover deterministic setup behavior; this does not establish native packaging or service behavior. |
 | M2a | Linux environment/service behavior | systemd, package lifecycle, and Linux-specific migration/upgrade boundaries; native Debian/Ubuntu checks remain required. |
-| M2b | Windows environment/service behavior | SCM identity, hidden credential repair, and Windows-specific migration/upgrade path; native x64/arm64 checks remain required. |
-| M2c | macOS environment/service behavior | LaunchDaemon and macOS-specific migration/upgrade path; native Intel/Apple Silicon checks remain required. |
+| M2b | Windows environment/service behavior | User scheduled-task and explicit system-scope SCM ownership, system-scope hidden credential repair, and Windows upgrade boundaries; native x64/arm64 checks remain required. |
+| M2c | macOS environment/service behavior | User LaunchAgent and explicit system-scope LaunchDaemon lifecycle and macOS upgrade boundaries; native Intel/Apple Silicon checks remain required. |
 | M2d | Desktop GUI helper and session boundary | Helper is limited to the same user's logged-in, unlocked session. Linux does not add a GUI helper backend. |
 | M2e | Tunnel profiles and existing ChatGPT Tunnel integration | CLI profile configuration/status/removal and service lifecycle are covered by code; live end-to-end Tunnel acceptance remains separate. |
-| M2f | Existing installation migration | Core supports Desktop migration. Linux adds explicit owner-bearing user-Runner and fixed root-Server CLI migrations; source review is complete, but native acceptance remains outstanding. Ownerless shared-key/custom units are not guessed; a fail-closed guard is not migration completion. |
+| M2f | Existing installation migration | v0.5 preserves existing v0.4.6-or-newer Environment identity, ownership, credentials and recovery records. Older installations must first use v0.4.6 as the bridge; removed pre-Environment Linux migration commands are not part of current acceptance. See the [compatibility policy](compatibility-policy.md). Native upgrade acceptance remains outstanding. |
 | M2g | Upgrade and rollback | Platform-specific prepare/authorize/finish constraints and incomplete outer installer recovery are recorded below; native full-installer validation remains required. |
 | M3 | Desktop, Web Runtime Console, and CLI | Shared Server-authorized fleet; optional local projects, viewer authentication, local service diagnosis, live setup progress, and user credential repair. Desktop Diagnostics has separate local Server/Runner lifecycle controls; persistent services are observed and periodically refreshed without auto-restart. |
 | M4 | Unified packaging | Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb`, each x64 and arm64. Artifacts do not prove native installation. |
@@ -22,7 +22,7 @@ This checklist records scope and evidence for the unified environment work. The 
 
 ### Confirmed automated evidence
 
-These automated results have been confirmed for the current branch at this checkpoint. Later changes or runs may change counts. They do not establish native installer, reboot, GUI-session, or upgrade behavior:
+The following results are historical evidence from the unified-environment development checkpoints recorded below. Keep the recorded source revisions and validation limits when citing them; counts without an exact revision do not establish revision-specific acceptance. They are not fresh test results for current main; later changes or runs may change counts. They do not establish native installer, reboot, GUI-session, or upgrade behavior:
 
 - Core: 70 tests passed.
 - Desktop: 148 TypeScript tests passed at `31940d7e` (including viewer presentation and Add Project routing); 204 Rust tests passed and 4 were ignored.
@@ -53,10 +53,10 @@ This evidence does **not** accept `.deb` installation, Core system-service migra
 
 | Target | Installer acceptance | Reboot/service acceptance | GUI acceptance | Upgrade acceptance |
 | --- | --- | --- | --- | --- |
-| Windows x64, NSIS | Not yet accepted on a real Windows x64 machine | Not yet accepted: SCM start/stop/restart, reboot persistence, service identity/SID, credential repair | Not yet accepted: same-user logged-in unlocked session helper and Desktop shutdown behavior | Not yet accepted: published HTTPS manifest verification and installed upgrade/rollback behavior |
-| Windows arm64, NSIS | Not yet accepted on a real Windows arm64 machine | Not yet accepted: native SCM behavior and reboot persistence | Not yet accepted: native GUI helper/session behavior | Not yet accepted: native installed upgrade and recovery |
-| macOS arm64, package | Not yet accepted on a real Apple Silicon Mac | Not yet accepted: LaunchDaemon lifecycle and reboot persistence | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
-| macOS x64, package | Not yet accepted on a real Intel Mac | Not yet accepted: LaunchDaemon lifecycle and reboot persistence | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
+| Windows x64, NSIS | Not yet accepted on a real Windows x64 machine | Not yet accepted: user scheduled-task and system SCM lifecycle, scope-dependent login/reboot availability, service identity/SID, system-scope credential repair | Not yet accepted: same-user logged-in unlocked session helper and Desktop shutdown behavior | Not yet accepted: published HTTPS manifest verification and installed upgrade/rollback behavior |
+| Windows arm64, NSIS | Not yet accepted on a real Windows arm64 machine | Not yet accepted: native user scheduled-task/system SCM behavior and scope-dependent login/reboot availability | Not yet accepted: native GUI helper/session behavior | Not yet accepted: native installed upgrade and recovery |
+| macOS arm64, package | Not yet accepted on a real Apple Silicon Mac | Not yet accepted: user LaunchAgent/system LaunchDaemon lifecycle and scope-dependent login/reboot availability | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
+| macOS x64, package | Not yet accepted on a real Intel Mac | Not yet accepted: user LaunchAgent/system LaunchDaemon lifecycle and scope-dependent login/reboot availability | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
 | Debian 12 x64, `.deb` | Not yet accepted on a native Debian 12 x64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: published manifest verification and installed package upgrade/rollback |
 | Debian 12 arm64, `.deb` | Not yet accepted on a native Debian 12 arm64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: native package upgrade/rollback |
 | Ubuntu 22.04+ x64, `.deb` | Not yet accepted on a native Ubuntu x64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: published manifest verification and installed package upgrade/rollback |
@@ -66,7 +66,7 @@ Linux/macOS upgrades use a staged owner-authorized flow: the original user runs 
 
 Rollback snapshots follow package ownership: Linux restores its managed Desktop executable, macOS restores the complete `.app` bundle, and Windows restores only `WebCodex.exe` plus the CLI, Server, and Runner executables under `webcodex-runtime/`. OS menu entries, `.desktop` files, and uninstall metadata remain with the package manager. Core also snapshots runtime executables and Environment data. Broken-installed-CLI recovery and complete outer-installer recovery still need native validation. These hooks have not received native installer acceptance.
 
-Linux’s explicit legacy CLI migration commands preserve owner-bearing Runner identity and the fixed root Server unit/socket plus its fixed env/data locations; they reuse the original user’s private API token and do not re-pair. Source review is complete, but Linux migration has not passed native acceptance. The system Server migration transfers only the Server; an independently configured Tunnel remains with its existing owner/profile and is not imported into Core. Ownerless shared-key configurations and custom units are not guessed or migrated automatically.
+The earlier pre-Environment Linux handoff described during unified-environment development is historical, not a v0.5 CLI operation. Current upgrade acceptance starts from an existing v0.4.6-or-newer Environment; installations older than v0.4.6 must first use that published bridge. Preserve the original service owner/scope, identities, credentials and recovery records, and verify the bridge before upgrading to v0.5. Follow the [compatibility policy](compatibility-policy.md#the-actual-stable-upgrade-sources); do not re-pair or infer ownership of custom services to bypass the bridge.
 
 A successful cross-compiled build or package inspection is useful packaging evidence, but does not satisfy a native row above. Record OS version, architecture, installer artifact identity, exact steps, observed result, and relevant logs for each completed row. Never include tokens, passwords, or other secrets in evidence.
 
@@ -78,14 +78,14 @@ A successful cross-compiled build or package inspection is useful packaging evid
 - Verify ordinary `resume --token-file` does not rotate a saved credential. Exercise `repair-user-credential [--token-file PATH]` through hidden input and protected file input; confirm it verifies the saved Server and username, atomically replaces the credential, and has no Runner-pairing or service-state effects. In Desktop Diagnostics, verify **Restore Server user credential** uses protected input.
 - Check `status --json` and `doctor --json`, and the explicit lifecycle for Server, Runner, and standalone Tunnel profiles. With Server and Runner already running, add second and third profiles through `configure-tunnel PROFILE --host embedded --credentials-file PATH`; confirm no standalone service is created, each result reports the required Server next action without restarting it, and one later Server restart supervises all enabled profiles. Confirm CLI-created profiles appear in Desktop, Desktop-created persistent profiles appear in `tunnel-status`, standalone behavior remains unchanged, and existing-owner transfer still requires a clean stop/uninstall. Exercise duplicate identity, credential conflict/rotation revision, stale revision and unsupported Windows system scope; all must fail closed without exposing API keys in arguments, snapshots, logs or errors.
 - Verify Desktop Diagnostics independently starts, stops, and restarts local Server and Runner services. Reopen a persistent environment with a stopped service and confirm Desktop only observes and periodically refreshes status without restarting it.
-- On Windows, verify `repair-credential runner` accepts the account password via hidden input, rejects reliance on Windows Hello PIN, runs under the real user SID, and leaves the password only with SCM. Do not print or retain the password in test evidence. Verify the native Runner credential-repair control.
+- On Windows system-scope environments, verify `repair-credential runner` accepts the account password via hidden input, rejects reliance on Windows Hello PIN, runs under the real user SID, and leaves the password only with SCM. Do not print or retain the password in test evidence. Verify the native Runner credential-repair control.
 - Verify GUI helpers run only in the same user's logged-in unlocked session. Linux has no added GUI helper backend. On macOS, confirm reboot recovery only after OS and project volumes are unlocked; WebCodex does not store FileVault unlock secrets.
 - Verify ChatGPT remains connected to the central Server through its existing MCP/Tunnel integration. Confirm a remote Runner has a separately reachable Server URL; setup does not open firewall ports or alter the listen address. Tailscale is optional.
 - Verify normal upgrade checks the published HTTPS source manifest and compares version, source SHA, and provenance hash without requiring a shared CI job or timestamp. A CI/development candidate requires explicit `--development-build` and reports `provenance_verified: false`; it must not be represented as official verification.
 
 ## 中文
 
-本清单记录统一环境工作的范围和证据边界。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 安装包由本分支构建流程定义；六类安装文件尚未完成原生构建/安装验收，也未作为统一安装包发布。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
+本清单记录当前 v0.5 统一环境工作的范围和证据边界；下文单独标明历史开发证据。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 安装包由当前开发版构建流程定义；六类安装文件尚未完成原生构建/安装验收，也未作为统一安装包发布。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
 
 ### 里程碑与范围
 
@@ -93,11 +93,11 @@ A successful cross-compiled build or package inspection is useful packaging evid
 | --- | --- | --- |
 | M1 | 共用配置核心：创建/加入、项目/无项目、身份、恢复及 Desktop/CLI 共用配置状态 | Core tests 覆盖确定性配置行为；不能证明原生打包或服务行为。 |
 | M2a | Linux 环境与服务行为 | systemd、安装包生命周期及 Linux 迁移/升级边界；仍需原生 Debian/Ubuntu 检查。 |
-| M2b | Windows 环境与服务行为 | SCM 身份、隐藏凭据修复及 Windows 迁移/升级路径；仍需原生 x64/arm64 检查。 |
-| M2c | macOS 环境与服务行为 | LaunchDaemon 和 macOS 迁移/升级路径；仍需原生 Intel/Apple Silicon 检查。 |
+| M2b | Windows 环境与服务行为 | 用户计划任务与显式 system scope SCM 所有权、system scope 隐藏凭据修复及 Windows 升级边界；仍需原生 x64/arm64 检查。 |
+| M2c | macOS 环境与服务行为 | 用户 LaunchAgent 与显式 system scope LaunchDaemon 生命周期及 macOS 升级边界；仍需原生 Intel/Apple Silicon 检查。 |
 | M2d | Desktop GUI helper 与会话边界 | helper 仅限同一用户已登录且未锁定的会话。Linux 不新增 GUI helper backend。 |
 | M2e | Tunnel profiles 与现有 ChatGPT Tunnel 集成 | CLI profile 配置/状态/删除和服务生命周期有代码覆盖；仍需单独验收真实端到端 Tunnel。 |
-| M2f | 现有安装迁移 | Core 支持 Desktop 迁移。Linux 新增显式的 owner Runner 与固定 root Server CLI 迁移；源码审查已完成，但仍需原生验收。不会猜测无 owner shared-key/custom unit；安全拒绝不等于迁移完成。 |
+| M2f | 现有安装迁移 | v0.5 保留已有 v0.4.6 或更新版本 Environment 的身份、所有者、凭据和恢复记录。更早的安装须先经过 v0.4.6 桥接；已移除的 pre-Environment Linux 迁移命令不属于当前验收范围。见[兼容策略](compatibility-policy.md)。原生升级仍待验收。 |
 | M2g | 升级与回滚 | 下文记录平台专属 prepare/authorize/finish 限制及外层安装器恢复缺口；仍需原生完整安装器验证。 |
 | M3 | Desktop、网页 Runtime Console、CLI 三端体验 | 同一 Server 的授权项目与 Runner；本机项目可空、viewer 用户认证、本机诊断、实时配置进度和用户凭据修复。Desktop Diagnostics 可独立控制本机 Server/Runner 生命周期；持久服务只观察并定期刷新状态，不会自动重启。 |
 | M4 | 统一打包 | Windows NSIS、macOS 安装包、Debian 12 / Ubuntu 22.04+ `.deb`，每个平台 x64 与 arm64。构建产物无法证明原生安装成功。 |
@@ -105,7 +105,7 @@ A successful cross-compiled build or package inspection is useful packaging evid
 
 ### 已确认的自动化验证证据
 
-以下为本分支此检查点已确认的自动化结果。后续代码或测试运行可能改变数量。这些结果不能证明原生安装器、重启、GUI 会话或升级行为：
+以下为下文统一环境开发检查点的历史证据，不是当前 main 重新运行的测试结果。引用时保留已有源码修订和验证边界；未注明精确修订的计数不能证明某个修订已验收。后续代码或测试运行可能改变数量。这些结果不能证明原生安装器、重启、GUI 会话或升级行为：
 
 - Core：70 项测试通过。
 - Desktop：`31940d7e` 上 148 项 TypeScript 测试通过（包含仅查看状态及添加项目入口）；204 项 Rust 测试通过，4 项被忽略。
@@ -136,10 +136,10 @@ PR 在 `42fedb56` 的 CI 失败后，已将原生 Computer helper 导出范围�
 
 | 目标平台 | 安装验收 | 重启/服务验收 | GUI 验收 | 升级验收 |
 | --- | --- | --- | --- | --- |
-| Windows x64，NSIS | 尚未在真实 Windows x64 机器验收 | 尚未验收 SCM 生命周期、重启持久性、服务身份/SID、凭据修复 | 尚未验收同用户登录且未锁定时的 helper 与 Desktop 退出行为 | 尚未验收已发布 HTTPS manifest 验证及安装后的升级/回滚 |
-| Windows arm64，NSIS | 尚未在真实 Windows arm64 机器验收 | 尚未验收原生 SCM 与重启持久性 | 尚未验收原生 GUI helper/会话行为 | 尚未验收原生安装升级与恢复 |
-| macOS arm64，安装包 | 尚未在真实 Apple Silicon Mac 验收 | 尚未验收 LaunchDaemon 生命周期与重启持久性 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
-| macOS x64，安装包 | 尚未在真实 Intel Mac 验收 | 尚未验收 LaunchDaemon 生命周期与重启持久性 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
+| Windows x64，NSIS | 尚未在真实 Windows x64 机器验收 | 尚未验收 用户计划任务与 system SCM 生命周期、依赖 scope 的登录/重启可用性、服务身份/SID、system scope 凭据修复 | 尚未验收同用户登录且未锁定时的 helper 与 Desktop 退出行为 | 尚未验收已发布 HTTPS manifest 验证及安装后的升级/回滚 |
+| Windows arm64，NSIS | 尚未在真实 Windows arm64 机器验收 | 尚未验收原生用户计划任务/system SCM 行为及依赖 scope 的登录/重启可用性 | 尚未验收原生 GUI helper/会话行为 | 尚未验收原生安装升级与恢复 |
+| macOS arm64，安装包 | 尚未在真实 Apple Silicon Mac 验收 | 尚未验收 用户 LaunchAgent/system LaunchDaemon 生命周期及依赖 scope 的登录/重启可用性 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
+| macOS x64，安装包 | 尚未在真实 Intel Mac 验收 | 尚未验收 用户 LaunchAgent/system LaunchDaemon 生命周期及依赖 scope 的登录/重启可用性 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
 | Debian 12 x64，`.deb` | 尚未在原生 Debian 12 x64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收已发布 manifest 验证及安装包升级/回滚 |
 | Debian 12 arm64，`.deb` | 尚未在原生 Debian 12 arm64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收原生安装包升级/回滚 |
 | Ubuntu 22.04+ x64，`.deb` | 尚未在原生 Ubuntu x64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收已发布 manifest 验证及安装包升级/回滚 |
@@ -149,7 +149,7 @@ Linux/macOS 升级使用分阶段的 owner 授权流程：原用户运行 `upgra
 
 回滚快照严格遵循包管理边界：Linux 恢复受管 Desktop 可执行文件，macOS 恢复完整 `.app` bundle，Windows 只恢复 `WebCodex.exe` 及 `webcodex-runtime/` 下的 CLI、Server、Runner。OS 菜单项、`.desktop` 文件和卸载元数据归包管理器所有。Core 也会快照 runtime 可执行文件和 Environment 数据。已安装 CLI 损坏后的恢复和完整外层安装器恢复仍需原生验证；这些钩子尚未通过原生安装器验收。
 
-Linux 显式旧 CLI 迁移命令会保留 owner Runner 身份及固定 root Server unit/socket 和固定 env/data 位置，复用原用户私有 API token，不重新配对。源码审查已完成，但 Linux 迁移尚未通过原生验收。system Server 迁移只迁移 Server；独立配置的 Tunnel 仍归原 owner/profile 管理，不会迁入 Core。不会猜测或自动迁移无 owner shared-key 配置和自定义 unit。
+统一环境开发阶段描述的 pre-Environment Linux 服务移交属于历史记录，不是 v0.5 CLI 操作。当前升级验收以已有 v0.4.6 或更新版本 Environment 为起点；更早的安装须先经过该已发布版本桥接。保留原服务所有者/范围、身份、凭据和恢复记录，验证桥接后再升级至 v0.5。遵循[兼容策略](compatibility-policy.md#the-actual-stable-upgrade-sources)，不得通过重新配对或猜测自定义服务所有权绕过桥接。
 
 交叉编译成功或检查包内容属于有用的打包证据，但不满足上表原生验收。每项完成后记录 OS 版本、架构、安装包身份、操作步骤、观察结果和相关日志。证据中不得包含 token、密码或其他密钥。
 
@@ -160,7 +160,7 @@ Linux 显式旧 CLI 迁移命令会保留 owner Runner 身份及固定 root Serv
 - 验证复用既有 Runner 身份的 `add-project`，以及 viewer 转 Runner 提示。中断后恢复配置；仅当无法确定 code 是否已兑换时请求 `--new-pairing-code`。
 - 验证普通 `resume --token-file` 不会轮换已保存凭据。通过隐藏输入和受保护文件测试 `repair-user-credential [--token-file PATH]`；确认会核对已保存的 Server 与用户名、原子替换凭据，且不影响 Runner 配对或服务状态。在 Desktop Diagnostics 确认 **Restore Server user credential** 使用受保护输入。
 - 检查 `status --json`、`doctor --json`，以及 Server、Runner、standalone Tunnel profile 的显式生命周期。在 Server 与 Runner 已运行时，用 `configure-tunnel PROFILE --host embedded --credentials-file PATH` 连续添加第 2、第 3 个 profile；确认不会创建 standalone 服务，每次结果只报告所需 Server next action、不会暗中重启，最后一次 Server restart 能 supervision 全部启用 profile。确认 CLI 新增后 Desktop 可见，Desktop 新增持久 profile 后 `tunnel-status` 可见，standalone 行为不回归，已有 owner 转移仍要求干净 stop/uninstall。覆盖 duplicate identity、credential conflict/rotation revision、stale revision、Windows system scope unsupported；全部必须 fail closed，且 API key 不得出现在参数、snapshot、日志或错误中。
-- Windows 上验证 `repair-credential runner` 通过隐藏输入获取账户密码，不依赖 Windows Hello PIN，以真实用户 SID 运行且密码只交由 SCM 保存。测试证据不可打印或保留密码。
+- Windows system scope 环境上验证 `repair-credential runner` 通过隐藏输入获取账户密码，不依赖 Windows Hello PIN，以真实用户 SID 运行且密码只交由 SCM 保存。测试证据不可打印或保留密码。
 - 验证 Desktop Diagnostics 可分别启动、停止和重启本机 Server 与 Runner。对停止服务的持久环境重新打开 Desktop，确认它只观察并定期刷新状态，不会自动重启服务。
 - 验证 Windows 原生 Runner 凭据修复控件。
 - 验证 GUI helper 仅在同一用户登录且未锁定的会话运行。Linux 不新增 GUI helper backend。macOS 需在系统和项目磁盘解锁后验证重启恢复；WebCodex 不保存 FileVault 解锁凭据。

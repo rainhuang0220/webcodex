@@ -71,6 +71,33 @@ Trace persistence is fail-open observability, so `runner.requests_observed` mean
 exactly that: enqueue records observed in the supplied trace tree. The report does
 not claim that the trace tree is a complete Runner-request ledger.
 
+## Privacy-bounded output transfer observations
+
+For newly observed successful outer `read_files` and `observe_jobs` calls, the
+optional additive `model_ergonomics.output_transfer` record holds counts and
+UTF-8 text/log-tail byte totals from the **final model-visible result**. It
+never persists file paths, Job identifiers, text, logs, or content hashes.
+
+- `read_files`: items, rendered text bytes, and the item/byte subset containing
+  identical text from the same path **within one returned batch**. This does
+  not detect duplicates across independent calls, and repeated text can be
+  intentional.
+- `observe_jobs`: number of baseline, delta, reset and unchanged observations,
+  with the returned stdout/stderr tail bytes split by category. A reset tail
+  may be necessary for recovery and is not automatically wasteful duplication.
+
+The offline profiler's `output_transfer` section summarizes only the exact
+outer calls that carry complete numeric evidence. It reports call counts,
+measured counts, sample/missing counts, and nullable totals. Historical
+ActionAudit rows, malformed/failed observations and trace-only evidence do
+not become zero-valued measurements. Code Mode nested child transfers are
+not individually measured by these outer-call counters.
+
+These figures are a diagnostic for deciding whether further compression
+is warranted. They are raw UTF-8 tail/text bytes rather than full serialized
+JSON, HTTP bytes, tokens, model turns or end-to-end latency; compare them
+alongside existing `results.serialized_tool_result_bytes`.
+
 ## Repair-turn and annotation semantics
 
 A **repair turn** is a model turn whose primary purpose is to correct a previous
@@ -168,6 +195,27 @@ timestamps. It is not end-to-end task wall time.
 Percentiles use deterministic nearest-rank semantics. For metrics with partially
 missing samples, `observed_total` and sample counts remain visible, while `total`
 is `null`; missing evidence is never substituted with zero.
+
+### Which tools produce the largest responses?
+
+The offline Agent Loop report now groups the **existing** ActionAudit
+`model_ergonomics.serialized_result_bytes` by its already-exposed outer
+tool name under `results.serialized_tool_result_bytes_by_tool`.
+Each tool receives its observed byte sum, available/missing call counts and
+deterministic nearest-rank p50/p95. Its `total` remains `null` if any
+selected call has missing, invalid or pre-result evidence; a complete tool
+remains usable even if another tool's evidence is incomplete.
+`availability.serialized_tool_result_bytes_by_tool` reports overall
+coverage and the number of outer calls without a tool name.
+
+Use only fully measured groups (`missing=0`) when ranking output-volume
+candidates for follow-up profiling. Missing tool names remain unattributed
+rather than being guessed from raw traces. Trace-only evidence returns
+an unavailable empty breakdown. This measure is the serialized model-facing
+ToolResult projection, excluding HTTP envelopes, model tokens, unrelated
+transport traffic, and nested Code Mode child results. It does not identify
+repeated text across calls or establish any end-to-end latency improvement.
+No runtime telemetry, tool schema or returned content is changed.
 
 ## Benchmark cases
 
@@ -322,6 +370,20 @@ synchronous completion, redispatch, unrelated outer Job, uncorrelated/substitute
 process, or pending without terminal evidence remains `partial`/`unsupported`,
 never upgraded to success.
 The guarded multi-file case is likewise not a pass from final bytes alone: persisted Direct canonical-call or Code Mode composition evidence must show exactly one `edit_project_files` call, at least one admitted search call, and at least two `read_files` calls (pre-edit and post-edit phases). Direct additionally requires the existing authoritative ModelErgonomics edit outcome to be exactly `applied`. Code Mode requires exactly one consequential known-result child, zero Job handoffs/outcome-unknown/nested failures, and the aggregate canonical mutation evidence to show one `state_changed=true` mutation and zero known no-change mutations, in addition to the fixture-side exact-byte oracle. A dry-run/no-op edit plus shell/process/write fallback therefore cannot be promoted to a pass. Current composition does not prove nested child ordering, so the benchmark does not claim stronger sequencing evidence than is persisted.
+
+The paired benchmark JSON also includes `paired_delta_summary` per case.
+It aggregates only pairs whose Direct and Code Mode reports passed the existing
+same-case/base and correctness/validation throughput gates. For task wall
+time, model-visible outer-call count (`outer_calls.total`), serialized
+`ToolResult` bytes, and annotated contract-repair turns, it reports the
+candidate-minus-Direct delta count, observed sum, and deterministic nearest-rank
+p50/p95. Each metric includes qualified-sample and missing counts; incomplete
+metrics have `total=null`, and cases with no qualified pairs never report a
+fabricated zero. The human summary prints the qualified pair count and a
+task-wall p50 delta only when all qualified pairs have timing evidence.
+These descriptive aggregates are not a causal speedup estimate, complete
+HTTP/token measurements, or exact model-turn counts. Use paired sample order,
+correctness, and end-to-end Host evidence before recommending defaults.
 
 This command coordinates real captures; it is not itself evidence that a model made
 fewer inference turns. Deterministic runtime/script acceptance and fixture oracles

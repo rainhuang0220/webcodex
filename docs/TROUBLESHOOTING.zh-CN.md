@@ -267,9 +267,21 @@ MCP schema 和返回的调用路径为准；工具改名后不再接受旧名称
 
 ### MCP tool list 看起来是旧的
 
-重连或重启 MCP client，让它重新执行 `initialize` 和 `tools/list`。如果 server
-刚升级，确认 public HTTPS 已指向新 service，并检查 `journalctl -u webcodex`
-中是否有 startup 或 auth errors。
+对比 Host 已加载的工具名称、参数与相同认证端点、相同协议下最新的 `tools/list`。
+Server 与 Runner 构建匹配，不能证明 Host 已加载当前契约。当前名称包括
+`read_tool_manifest`、`get_runtime_status` 和 `edit_project_files`；Stateless 2026
+调用元数据应放在外层 `_wc` 中，旧的顶层 `recording_session_id` 已退役。
+`work_on_project` 也不再接受 `include_project_instructions` 和 `include_workflow_guidance`。
+
+对于直接连接 ChatGPT 的自定义 MCP 服务，刷新连接元数据，确认契约更新后在新对话中测试。
+已发布插件的工具更新采用不同的审核流程，参见 OpenAI 的
+[元数据刷新说明](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata)。
+其他 MCP 客户端按各自协议重连或重新发现。升级服务后还应确认 public HTTPS 指向新服务。
+重启 Runner 不能保证 Host 的工具缓存得到刷新。
+
+不存在或已退役的工具没有有效的网关重试路径。应刷新发现并选择当前工具，避免猜测新名称
+或通过回退重复执行写操作。已知的网关工具仍须使用当前规范参数并通过原有授权。
+服务端契约测试无法证明特定 Host 缓存或已发布插件已经更新。
 
 ### Runner offline
 

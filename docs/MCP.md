@@ -190,8 +190,10 @@ and fetch their sanitized trace/timing details only when expanded. The inline ca
 shows the canonical hashed Window key used by the Window activity ledger; the
 thread panel puts the same identity under Diagnostics, making
 support traces attributable without exposing the Host's raw Window identifier.
-New cards use `ui://webcodex/work-result/v17` so Hosts with cached older templates
-load the current thread-panel, lazy-detail and canonical tool-name contract.
+New cards use the Work Result resource URI advertised by the current descriptor,
+owned by the [canonical App registry](../src/mcp/app_registry/builtin.rs). Refresh
+Host schemas and reopen cached readers to load the current thread-panel, lazy-detail
+and canonical tool-name contract.
 Retired resource URIs fail closed instead of serving a new template under an old cache key.
 
 ## Existing Server

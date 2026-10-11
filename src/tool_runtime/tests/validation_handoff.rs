@@ -16,6 +16,8 @@ use crate::runner_protocol::{
     ShellCommandExecutionState, ShellJobActivity, ShellJobActivityPhase, ShellJobActivitySource,
     ShellJobActivityState, ShellJobOpRequest, ShellJobValidationMetadata,
     ShellJobValidationProgress, ShellJobValidationStep, JOB_INVENTORY_MAX_TERMINAL_JOBS,
+    VALIDATION_STEP_SPAWN_FAILED_CODE, VALIDATION_STEP_WAIT_FAILED_CODE,
+    VALIDATION_TOOL_UNAVAILABLE_CODE,
 };
 use crate::tool_runtime::sessions::{SessionTransport, DEFAULT_MAX_EVENTS_PER_SESSION};
 use crate::tool_runtime::validation_events::validation_summary_for_session;
@@ -1070,6 +1072,230 @@ async fn fast_cargo_check_completes_in_windows_and_leaves_no_visible_job() {
     assert_eq!(validation["events_total"], 1);
     assert_eq!(validation["status"], "passed");
     assert_eq!(validation["latest"]["tool_name"], "cargo_check");
+}
+
+fn infrastructure_progress() -> ShellJobValidationProgress {
+    ShellJobValidationProgress {
+        completed: 0,
+        current_step: None,
+        failed_step: None,
+    }
+}
+
+fn failed_check_progress() -> ShellJobValidationProgress {
+    ShellJobValidationProgress {
+        completed: 0,
+        current_step: None,
+        failed_step: Some("check".to_string()),
+    }
+}
+
+/// Finish one in-window `cargo_check` with a caller-supplied terminal update.
+async fn finish_in_window_cargo_check(
+    client_id: &str,
+    exit_code: Option<i32>,
+    error: Option<&str>,
+    progress: ShellJobValidationProgress,
+    stderr: &str,
+) -> (crate::tool_runtime::ToolResult, serde_json::Value) {
+    let runtime = runtime_with_agent_project(client_id)
+        .with_validation_sync_wait(std::time::Duration::from_millis(300));
+    register_agent(
+        &runtime,
+        client_id,
+        None,
+        RunnerCapabilities {
+            async_shell_jobs: true,
+            structured_validation_argv: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let project = agent_test_project_id(client_id);
+    let auth = auth_context(None, true);
+    let session = runtime.sessions.start_session(Some(project.clone()), None);
+    let session_id = session.session_id.clone();
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        let auth = auth.clone();
+        let session_id = session_id.clone();
+        async move {
+            runtime
+                .dispatch_with_auth(
+                    ToolCall::CargoCheck {
+                        project,
+                        session_id: Some(session_id),
+                        cwd: None,
+                        all_targets: Some(true),
+                        all_features: None,
+                        no_default_features: None,
+                        features: None,
+                        package: None,
+                        packages: None,
+                        timeout_secs: Some(600),
+                        sync_wait_secs: Some(60),
+                    },
+                    Some(&auth),
+                )
+                .await
+        }
+    });
+    let (request, job_id) = poll_start_validation_job(&runtime, client_id).await;
+    let mut update = cargo_test_update(
+        client_id,
+        &request.request_id,
+        &job_id,
+        "failed",
+        "",
+        stderr,
+        exit_code,
+        progress,
+        true,
+    );
+    update.error = error.map(str::to_string);
+    runtime
+        .runner_registry
+        .update_job(update)
+        .await
+        .expect("in-window cargo_check terminal update");
+    let result = task.await.unwrap();
+    let list = runtime.list_jobs_for_auth(None, None, None).await;
+    assert!(list.success, "{:?}", list.error);
+    assert!(
+        list.output["jobs"]
+            .as_array()
+            .is_some_and(|jobs| jobs.is_empty()),
+        "hidden validation job remained visible: {}",
+        list.output
+    );
+    let summary = runtime.sessions.summary(&session_id, Some(50)).unwrap();
+    let validation = validation_summary_for_session(&summary);
+    (result, validation)
+}
+
+fn assert_validation_never_started(result: &crate::tool_runtime::ToolResult, code: &str) {
+    assert!(!result.success);
+    assert_eq!(result.output["execution_state"], "not_started");
+    assert_eq!(result.output["command_started"], false);
+    assert_eq!(result.output["command_completed"], false);
+    assert_eq!(result.output["terminal"], true);
+    assert_eq!(result.output["promoted_to_job"], false);
+    assert_eq!(result.output["failure_kind"], "executor_unavailable");
+    assert!(result.output.get("job_id").is_none());
+    assert!(result.output["exit_code"].is_null());
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains(code),
+        "infrastructure code missing from error: {error}"
+    );
+    assert!(error.contains("No command was started."), "{error}");
+    assert!(
+        !error.contains("structured validation command completed with validation failure"),
+        "{error}"
+    );
+    assert_model_cargo_result_matches_schema("cargo_check", result);
+}
+
+fn assert_validation_outcome_unknown(result: &crate::tool_runtime::ToolResult, code: &str) {
+    assert!(!result.success);
+    assert_eq!(result.output["execution_state"], "outcome_unknown");
+    assert_eq!(result.output["command_started"], true);
+    assert_eq!(result.output["command_completed"], false);
+    assert_eq!(result.output["terminal"], false);
+    assert_eq!(result.output["promoted_to_job"], false);
+    assert_eq!(result.output["failure_kind"], "outcome_unknown");
+    assert!(result.output.get("job_id").is_none());
+    assert!(result.output["exit_code"].is_null());
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(error.contains(code), "{error}");
+    assert!(
+        error.contains("Command execution outcome is unknown"),
+        "{error}"
+    );
+    assert!(error.contains("Do not automatically retry"), "{error}");
+    assert!(
+        !error.contains("structured validation command completed with validation failure"),
+        "{error}"
+    );
+    assert_model_cargo_result_matches_schema("cargo_check", result);
+}
+
+fn assert_completed_check_failure(result: &crate::tool_runtime::ToolResult) {
+    assert!(!result.success);
+    assert_eq!(result.output["execution_state"], "completed");
+    assert_eq!(result.output["command_started"], true);
+    assert_eq!(result.output["command_completed"], true);
+    assert_eq!(result.output["terminal"], true);
+    assert_eq!(result.output["failure_kind"], "validation_failed");
+    assert_eq!(result.output["exit_code"], 1);
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("structured validation command completed with validation failure"),
+        "{error}"
+    );
+    assert_model_cargo_result_matches_schema("cargo_check", result);
+}
+
+/// Spawn and tool-availability failures finish inside the sync window, but no
+/// check ran. A wait failure means the process may have started and its result
+/// was lost. A nonzero exit remains a completed project check.
+#[tokio::test]
+async fn in_window_validation_infrastructure_failure_is_not_a_completed_check() {
+    let (spawn_failed, spawn_validation) = finish_in_window_cargo_check(
+        "vhandoff-infra-spawn",
+        None,
+        Some(VALIDATION_STEP_SPAWN_FAILED_CODE),
+        infrastructure_progress(),
+        "",
+    )
+    .await;
+    assert_validation_never_started(&spawn_failed, VALIDATION_STEP_SPAWN_FAILED_CODE);
+    assert_eq!(spawn_validation["status"], "failed");
+    assert_eq!(spawn_validation["latest"]["tool_name"], "cargo_check");
+    assert_eq!(spawn_validation["latest"]["failure_kind"], "unknown");
+
+    let (tool_unavailable, _) = finish_in_window_cargo_check(
+        "vhandoff-infra-tool",
+        None,
+        Some(VALIDATION_TOOL_UNAVAILABLE_CODE),
+        infrastructure_progress(),
+        "",
+    )
+    .await;
+    assert_validation_never_started(&tool_unavailable, VALIDATION_TOOL_UNAVAILABLE_CODE);
+
+    let (wait_failed, wait_validation) = finish_in_window_cargo_check(
+        "vhandoff-infra-wait",
+        None,
+        Some(VALIDATION_STEP_WAIT_FAILED_CODE),
+        infrastructure_progress(),
+        "",
+    )
+    .await;
+    assert_validation_outcome_unknown(&wait_failed, VALIDATION_STEP_WAIT_FAILED_CODE);
+    assert_eq!(wait_validation["latest"]["failure_kind"], "unknown");
+
+    let (check_failed, check_validation) = finish_in_window_cargo_check(
+        "vhandoff-infra-real-failure",
+        Some(1),
+        None,
+        failed_check_progress(),
+        "error: could not compile `demo`\n",
+    )
+    .await;
+    assert_completed_check_failure(&check_failed);
+    assert_ne!(check_validation["latest"]["failure_kind"], "unknown");
+
+    // An infrastructure code alongside a real exit is still the check's result.
+    let (coded_exit, _) = finish_in_window_cargo_check(
+        "vhandoff-infra-coded-exit",
+        Some(1),
+        Some(VALIDATION_STEP_SPAWN_FAILED_CODE),
+        completed_progress(),
+        "",
+    )
+    .await;
+    assert_completed_check_failure(&coded_exit);
 }
 
 #[tokio::test]

@@ -467,6 +467,83 @@ fn truncate_read_item_to_fit(item: &Value, max_item_bytes: usize) -> Option<Valu
     best
 }
 
+// The second-stage follow-up can change in size when a partial read range is
+// shortened. Keep one owned batch in place while probing candidate lengths:
+// cloning the already-accepted prefix for every binary-search step scales with
+// the entire batch rather than the candidate item.
+fn sync_truncated_batch_counts(output: &mut Value, next_index: Option<usize>) {
+    let items = output["items"]
+        .as_array()
+        .expect("truncated batch must contain canonical items");
+    let returned_count = items.len();
+    let succeeded_count = items
+        .iter()
+        .filter(|item| item["success"].as_bool() == Some(true))
+        .count();
+    output["returned_count"] = json!(returned_count);
+    output["succeeded_count"] = json!(succeeded_count);
+    output["failed_count"] = json!(returned_count - succeeded_count);
+    output["next_index"] = json!(next_index);
+}
+
+fn fit_truncated_batch_to_budget(
+    mut output: Value,
+    payload_budget: usize,
+    projection: &ReadModelProjection,
+) -> Value {
+    while projected_batch_serialized_len(&output, projection) > payload_budget {
+        let Some(items) = output.get_mut("items").and_then(Value::as_array_mut) else {
+            break;
+        };
+        let Some(removed) = items.pop() else {
+            break;
+        };
+        let next_index = removed["index"].as_u64().map(|index| index as usize);
+        let mut low = 1usize;
+        let mut high = removed["output"]["returned_lines"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(1) as usize;
+        let mut best = None;
+
+        while low <= high {
+            let keep = low + (high - low) / 2;
+            let Some(partial) = truncate_read_item(&removed, keep) else {
+                break;
+            };
+            output["items"]
+                .as_array_mut()
+                .expect("validated canonical batch")
+                .push(partial);
+            sync_truncated_batch_counts(&mut output, next_index);
+            let fits = projected_batch_serialized_len(&output, projection) <= payload_budget;
+            // Retain only the candidate item. The accepted prefix stays in
+            // the original batch throughout the binary search.
+            let candidate = output["items"]
+                .as_array_mut()
+                .expect("validated canonical batch")
+                .pop()
+                .expect("candidate was just appended");
+            if fits {
+                best = Some(candidate);
+                low = keep + 1;
+            } else {
+                high = keep.saturating_sub(1);
+            }
+        }
+        if let Some(partial) = best {
+            output["items"]
+                .as_array_mut()
+                .expect("validated canonical batch")
+                .push(partial);
+            sync_truncated_batch_counts(&mut output, next_index);
+            return output;
+        }
+        sync_truncated_batch_counts(&mut output, next_index);
+    }
+    output
+}
+
 fn apply_output_budget(
     project: &str,
     requested_count: usize,
@@ -476,20 +553,20 @@ fn apply_output_budget(
 ) -> Value {
     let result_budget = normalized_result_budget(max_result_bytes);
     let payload_budget = result_budget.saturating_sub(MODEL_RESULT_ENVELOPE_RESERVE_BYTES);
-    let complete = batch_output(
-        project,
-        requested_count,
-        completed.clone(),
-        false,
-        None,
-        None,
-    );
+    // Own the canonical batch while measuring the final model projection.
+    // The common complete-fit path can return it without cloning every read
+    // body; on truncation, move its items into the existing budgeting loop.
+    let mut complete = batch_output(project, requested_count, completed, false, None, None);
     // Budget the shape the model would actually receive after the existing
     // sparse projection. The canonical representation remains available for
     // Session recording and for any partial-item cursor construction below.
     if projected_batch_serialized_len(&complete, projection) <= payload_budget {
         return complete;
     }
+    let completed = complete["items"]
+        .as_array_mut()
+        .map(std::mem::take)
+        .expect("batch_output always contains the canonical read items");
 
     let truncation_reason = if result_budget == MAX_SERIALIZED_OUTPUT_BYTES {
         "hard_result_cap"
@@ -543,7 +620,7 @@ fn apply_output_budget(
         break;
     }
 
-    let mut output = batch_output(
+    let output = batch_output(
         project,
         requested_count,
         returned,
@@ -551,58 +628,9 @@ fn apply_output_budget(
         next_index,
         Some(truncation_reason),
     );
-    // The combined follow-up changes size with the partial range. Fit the last
-    // item against the exact invocation projection before dropping it entirely.
-    while projected_batch_serialized_len(&output, projection) > payload_budget {
-        let Some(items) = output.get_mut("items").and_then(Value::as_array_mut) else {
-            break;
-        };
-        let Some(removed) = items.pop() else {
-            break;
-        };
-        next_index = removed["index"].as_u64().map(|index| index as usize);
-        let prefix = items.clone();
-        let mut low = 1;
-        let mut high = removed["output"]["returned_lines"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_sub(1) as usize;
-        let mut best = None;
-        while low <= high {
-            let keep = low + (high - low) / 2;
-            let Some(partial) = truncate_read_item(&removed, keep) else {
-                break;
-            };
-            let mut candidate_items = prefix.clone();
-            candidate_items.push(partial);
-            let candidate = batch_output(
-                project,
-                requested_count,
-                candidate_items,
-                true,
-                next_index,
-                Some(truncation_reason),
-            );
-            if projected_batch_serialized_len(&candidate, projection) <= payload_budget {
-                best = Some(candidate);
-                low = keep + 1;
-            } else {
-                high = keep.saturating_sub(1);
-            }
-        }
-        if let Some(candidate) = best {
-            return candidate;
-        }
-        output = batch_output(
-            project,
-            requested_count,
-            prefix,
-            true,
-            next_index,
-            Some(truncation_reason),
-        );
-    }
-    output
+    // Recheck the exact final projection using in-place binary-search probes,
+    // retaining the accepted prefix and all canonical continuation semantics.
+    fit_truncated_batch_to_budget(output, payload_budget, projection)
 }
 
 pub(crate) fn apply_model_facing_output_budget(
@@ -630,7 +658,15 @@ pub(crate) fn apply_model_facing_output_budget(
     else {
         return;
     };
-    let Some(completed) = output.get("items").and_then(Value::as_array).cloned() else {
+    // All metadata has been validated; the original read bodies are no longer
+    // needed separately after budgeting. Keep the surrounding result metadata
+    // while transferring item ownership instead of cloning potentially 512 KiB.
+    let Some(completed) = result
+        .output
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+    else {
         return;
     };
 
@@ -657,9 +693,11 @@ pub(crate) fn apply_model_facing_output_budget(
     ] {
         root.remove(key);
     }
-    if let Some(budgeted) = budgeted.as_object() {
+    // Merge the owned budget result back into the original envelope to retain
+    // any independent Session/context overlays, with no second item copy.
+    if let Value::Object(budgeted) = budgeted {
         for (key, value) in budgeted {
-            root.insert(key.clone(), value.clone());
+            root.insert(key, value);
         }
     }
 }
@@ -1291,6 +1329,287 @@ mod tests {
             },
             "error": null
         })
+    }
+
+    // Frozen reference of the previous second-stage trimming implementation.
+    // Deliberately retains its prefix clone and fresh batch construction so
+    // correctness can be tested independently from the optimized ownership
+    // path, including exact continuation and serialized sizing semantics.
+    fn reference_truncated_batch_fit(
+        mut output: Value,
+        payload_budget: usize,
+        projection: &ReadModelProjection,
+    ) -> Value {
+        let project = output["project"].as_str().unwrap().to_string();
+        let requested_count = output["requested_count"].as_u64().unwrap() as usize;
+        let reason = output["truncation_reason"].as_str().unwrap().to_string();
+        while projected_batch_serialized_len(&output, projection) > payload_budget {
+            let Some(items) = output.get_mut("items").and_then(Value::as_array_mut) else {
+                break;
+            };
+            let Some(removed) = items.pop() else {
+                break;
+            };
+            let next_index = removed["index"].as_u64().map(|index| index as usize);
+            let prefix = items.clone();
+            let mut low = 1;
+            let mut high = removed["output"]["returned_lines"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(1) as usize;
+            let mut best = None;
+            while low <= high {
+                let keep = low + (high - low) / 2;
+                let Some(partial) = truncate_read_item(&removed, keep) else {
+                    break;
+                };
+                let mut candidate_items = prefix.clone();
+                candidate_items.push(partial);
+                let candidate = batch_output(
+                    &project,
+                    requested_count,
+                    candidate_items,
+                    true,
+                    next_index,
+                    Some(&reason),
+                );
+                if projected_batch_serialized_len(&candidate, projection) <= payload_budget {
+                    best = Some(candidate);
+                    low = keep + 1;
+                } else {
+                    high = keep.saturating_sub(1);
+                }
+            }
+            if let Some(candidate) = best {
+                return candidate;
+            }
+            output = batch_output(
+                &project,
+                requested_count,
+                prefix,
+                true,
+                next_index,
+                Some(&reason),
+            );
+        }
+        output
+    }
+
+    #[test]
+    fn truncated_batch_backoff_matches_previous_exact_model_result_across_budgets() {
+        let unicode = (0..180)
+            .map(|index| format!("第{index:03}行-{}-\\\"\\t", "界".repeat(25)))
+            .collect::<Vec<_>>();
+        let ascii = (0..210)
+            .map(|index| format!("line-{index:04}-{}", "x".repeat(100)))
+            .collect::<Vec<_>>();
+        let mut failed = ranged_item(1, 25, &["rejected".to_string()]);
+        failed["success"] = json!(false);
+        failed["error"] = json!("read_file failed: PRIVATE_MISSING");
+        let batches = [
+            (vec![ranged_item(0, 11, &unicode)], Some(0usize)),
+            (
+                vec![
+                    default_complete_item(0, &["prefix".repeat(1000)]),
+                    ranged_item(1, 11, &ascii),
+                ],
+                Some(1),
+            ),
+            (
+                vec![
+                    default_complete_item(0, &["prefix".repeat(3500)]),
+                    default_complete_item(1, &["sentinel".repeat(1200)]),
+                    ranged_item(2, 51, &unicode),
+                ],
+                Some(2),
+            ),
+            (
+                vec![
+                    default_complete_item(0, &["first".repeat(600)]),
+                    failed,
+                    ranged_item(2, 11, &ascii),
+                ],
+                Some(2),
+            ),
+            (Vec::new(), Some(0)),
+        ];
+        let mut exercised_partial = 0;
+        let mut exercised_complete_drop = 0;
+        for (items, next_index) in batches {
+            for reason in ["batch_response_budget", "hard_result_cap"] {
+                for budget in [
+                    256,
+                    1024,
+                    2048,
+                    4096,
+                    8 * 1024,
+                    16 * 1024,
+                    32 * 1024,
+                    64 * 1024,
+                ] {
+                    let count = items.len();
+                    let input = batch_output(
+                        "agent:oe:demo",
+                        count,
+                        items.clone(),
+                        true,
+                        next_index,
+                        Some(reason),
+                    );
+                    let mut projection =
+                        batch_projection(count, Some(budget + MODEL_RESULT_ENVELOPE_RESERVE_BYTES));
+                    if let ReadModelProjection::Batch {
+                        with_line_numbers, ..
+                    } = &mut projection
+                    {
+                        *with_line_numbers = Some(true);
+                    }
+                    let expected =
+                        reference_truncated_batch_fit(input.clone(), budget, &projection);
+                    let actual = fit_truncated_batch_to_budget(input, budget, &projection);
+                    assert_eq!(
+                        actual, expected,
+                        "budget={budget} reason={reason} items={count}: optimized backoff must be exact"
+                    );
+                    if actual["items"].as_array().is_some_and(|returned| {
+                        returned
+                            .iter()
+                            .any(|item| item["output"]["budget_truncated"] == true)
+                    }) {
+                        exercised_partial += 1;
+                    }
+                    if actual["items"]
+                        .as_array()
+                        .is_some_and(|returned| returned.len() < count)
+                    {
+                        exercised_complete_drop += 1;
+                    }
+                    let mut model = ToolResult::ok(actual);
+                    add_actionable_read_continuations(&projection, &mut model);
+                    super::super::result_projection::sparsify_complete_read_success(
+                        "read_files",
+                        &mut model,
+                    );
+                    if let Some(call) = model.output.get("suggested_call") {
+                        assert_eq!(call["tool"], "read_files");
+                        ToolCall::from_tool_name("read_files", call["arguments"].clone())
+                            .expect("backoff continuation must be parser-ready");
+                    }
+                }
+            }
+        }
+        assert!(
+            exercised_partial > 0,
+            "fixture must exercise partial backoff"
+        );
+        assert!(
+            exercised_complete_drop > 0,
+            "fixture must exercise whole-item backoff"
+        );
+    }
+
+    #[test]
+    fn owned_budget_merge_preserves_overlays_and_continuations() {
+        let metadata = json!({
+            "session_hint": {"open_counts": {"todo": 2}},
+            "job_attention": {"items": [{"state": "terminal", "outcome": "passed"}]},
+            "future_metadata": {"value": "opaque", "count": 7}
+        });
+        let partial_lines = (0..900)
+            .map(|index| format!("第{index:04}行-{}", "界".repeat(40)))
+            .collect::<Vec<_>>();
+        let failed = json!({
+            "index": 1,
+            "path": "src/1.rs",
+            "success": false,
+            "output": {"reason_code": "not_file"},
+            "error": "read_file failed: not_file"
+        });
+
+        for (items, budget) in [
+            (
+                vec![
+                    default_complete_item(0, &["alpha\n\t界".to_string()]),
+                    default_complete_item(1, &["beta".to_string()]),
+                ],
+                None,
+            ),
+            (vec![ranged_item(0, 11, &partial_lines)], None),
+            (
+                vec![
+                    default_complete_item(0, &["x".repeat(140 * 1024)]),
+                    failed,
+                    default_complete_item(2, &["y".repeat(140 * 1024)]),
+                ],
+                Some(256 * 1024),
+            ),
+        ] {
+            let count = items.len();
+            let projection = batch_projection(count, budget);
+            let mut expected = ToolResult::ok(apply_output_budget(
+                "agent:oe:demo",
+                count,
+                items.clone(),
+                budget,
+                &projection,
+            ));
+            let mut actual = ToolResult::ok(batch_output(
+                "agent:oe:demo",
+                count,
+                items,
+                false,
+                None,
+                None,
+            ));
+            for (key, value) in metadata.as_object().unwrap() {
+                actual.output[key] = value.clone();
+                expected.output[key] = value.clone();
+            }
+
+            apply_model_facing_output_budget(&mut actual, budget, &projection);
+            assert_eq!(
+                serde_json::to_value(&actual).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "moving owned items must preserve all canonical fields and overlays"
+            );
+            add_actionable_read_continuations(&projection, &mut actual);
+            add_actionable_read_continuations(&projection, &mut expected);
+            super::super::result_projection::sparsify_complete_read_success(
+                "read_files",
+                &mut actual,
+            );
+            super::super::result_projection::sparsify_complete_read_success(
+                "read_files",
+                &mut expected,
+            );
+            assert_eq!(
+                serde_json::to_value(&actual).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "continuation and sparse model projection must be unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_budget_guard_preserves_invalid_or_failed_result_without_mutation() {
+        for mut result in [
+            ToolResult::ok(json!({"project": "demo", "requested_count": 1})),
+            ToolResult::ok(json!({"requested_count": 1, "items": []})),
+            ToolResult::ok(json!({"project": "demo", "items": []})),
+            ToolResult::ok(json!({"project": "demo", "requested_count": 1, "items": "invalid"})),
+            ToolResult::err_with_output(
+                "read_files failed",
+                json!({"project": "demo", "requested_count": 1, "items": []}),
+            ),
+        ] {
+            let before = serde_json::to_value(&result).unwrap();
+            apply_model_facing_output_budget(&mut result, None, &batch_projection(1, None));
+            assert_eq!(
+                serde_json::to_value(&result).unwrap(),
+                before,
+                "invalid or failed results cannot lose items or metadata"
+            );
+        }
     }
 
     #[test]

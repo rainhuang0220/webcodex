@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import closing
 import json
 import sqlite3
 import tempfile
@@ -100,6 +101,7 @@ class AgentLoopReportTests(unittest.TestCase):
         error_kind: str | None = None,
         edit_outcome: object | None = None,
         normalization_code: object | None = None,
+        output_transfer: dict[str, object] | None = None,
         schema_version: int = 12,
     ) -> None:
         telemetry: dict[str, object] = {
@@ -125,6 +127,8 @@ class AgentLoopReportTests(unittest.TestCase):
             telemetry["readiness"] = readiness
         if job_convergence is not None:
             telemetry["job_convergence"] = job_convergence
+        if output_transfer is not None:
+            telemetry["output_transfer"] = output_transfer
         summary: dict[str, object] = {}
         if previous_trace_id is not None:
             summary["previous_meaningful_call"] = previous_trace_id
@@ -132,7 +136,7 @@ class AgentLoopReportTests(unittest.TestCase):
             summary["model_ergonomics"] = telemetry
         if composition is not None:
             summary["code_mode_composition"] = composition
-        with sqlite3.connect(self.audit_db) as connection:
+        with closing(sqlite3.connect(self.audit_db)) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO action_events (
@@ -301,7 +305,7 @@ class AgentLoopReportTests(unittest.TestCase):
     def test_input_normalization_unknown_codes_and_raw_summary_never_leak(self) -> None:
         self.insert_input_event("a", normalization_code="PRIVATE_UNKNOWN_CODE")
         self.insert_input_event("b", normalization_code={"PRIVATE_KEY": "PRIVATE_VALUE"})
-        with sqlite3.connect(self.audit_db) as connection:
+        with closing(sqlite3.connect(self.audit_db)) as connection, connection:
             connection.execute("UPDATE action_events SET summary_json = json_set(summary_json, '$.raw_arguments', 'PRIVATE_ARGS', '$.output', 'PRIVATE_OUTPUT')")
         result = self.summarize()
         metrics = result["input_ergonomics"]
@@ -326,7 +330,7 @@ class AgentLoopReportTests(unittest.TestCase):
     def test_input_repair_proxy_requires_boolean_success_in_context(self) -> None:
         self.insert_input_event("a", success=False, error_kind="invalid_arguments")
         self.insert_input_event("b", link=False, started=130, handed=140, transition="serial", previous_trace_id="a")
-        with sqlite3.connect(self.audit_db) as connection:
+        with closing(sqlite3.connect(self.audit_db)) as connection, connection:
             connection.execute("UPDATE action_events SET summary_json = json_set(summary_json, '$.model_ergonomics.success', 1) WHERE event_id = 'b'")
         proxy = self.summarize()["input_ergonomics"]["immediate_same_tool_repair_proxy"]
         self.assertFalse(proxy["available"])
@@ -589,6 +593,96 @@ class AgentLoopReportTests(unittest.TestCase):
         )
         self.assertIsNone(result["failures"]["resolved_recoveries"])
 
+    def test_output_transfer_reports_read_text_and_job_log_bytes_without_payload(self) -> None:
+        self.insert_event(
+            "read",
+            tool="read_files",
+            schema_version=13,
+            output_transfer={
+                "kind": "read_files", "items": 3, "text_bytes": 120,
+                "identical_same_path_text_items": 1,
+                "identical_same_path_text_bytes": 40,
+                "PRIVATE_SOURCE": "PRIVATE_CONTENT",
+            },
+        )
+        self.insert_event(
+            "observe",
+            tool="observe_jobs",
+            schema_version=13,
+            output_transfer={
+                "kind": "observe_jobs", "items": 4,
+                "baseline_items": 1, "delta_items": 1,
+                "reset_items": 1, "unchanged_items": 1,
+                "baseline_log_bytes": 50, "delta_log_bytes": 10,
+                "reset_log_bytes": 30, "unchanged_log_bytes": 0,
+                "PRIVATE_LOG": "PRIVATE_CONTENT",
+            },
+            started=150, handed=170, transition="serial",
+        )
+        result = self.summarize()
+        reads = result["output_transfer"]["read_files"]
+        jobs = result["output_transfer"]["observe_jobs"]
+        self.assertEqual((reads["calls"], reads["measured_calls"]), (1, 1))
+        self.assertEqual(reads["metrics"]["text_bytes"]["total"], 120)
+        self.assertEqual(reads["metrics"]["identical_same_path_text_bytes"]["total"], 40)
+        self.assertEqual(jobs["metrics"]["reset_log_bytes"]["total"], 30)
+        self.assertEqual(jobs["metrics"]["delta_log_bytes"]["total"], 10)
+        self.assertEqual(jobs["metrics"]["unchanged_items"]["total"], 1)
+        self.assertTrue(result["availability"]["output_transfer"]["read_files"]["available"])
+        self.assertTrue(result["availability"]["output_transfer"]["observe_jobs"]["available"])
+        self.assertNotIn("PRIVATE_", json.dumps(result))
+
+    def test_output_transfer_missing_and_invalid_counters_are_not_zero(self) -> None:
+        valid = {
+            "kind": "read_files", "items": 1, "text_bytes": 15,
+            "identical_same_path_text_items": 0,
+            "identical_same_path_text_bytes": 0,
+        }
+        self.insert_event("read-known", tool="read_files", schema_version=13,
+                          output_transfer=valid)
+        self.insert_event("read-legacy", tool="read_files", schema_version=12,
+                          started=150, handed=170, transition="serial")
+        invalid_job = {
+            "kind": "observe_jobs", "items": 1,
+            "baseline_items": 1, "delta_items": 1,
+            "reset_items": 0, "unchanged_items": 0,
+            "baseline_log_bytes": 20, "delta_log_bytes": 10,
+            "reset_log_bytes": 0, "unchanged_log_bytes": 0,
+        }
+        self.insert_event("observe-bad", tool="observe_jobs", schema_version=13,
+                          output_transfer=invalid_job, started=200, handed=220,
+                          transition="serial")
+        result = self.summarize()
+        reads = result["output_transfer"]["read_files"]
+        self.assertEqual((reads["calls"], reads["measured_calls"]), (2, 1))
+        self.assertEqual(reads["metrics"]["text_bytes"]["observed_total"], 15)
+        self.assertEqual(reads["metrics"]["text_bytes"]["missing"], 1)
+        self.assertIsNone(reads["metrics"]["text_bytes"]["total"])
+        self.assertFalse(result["availability"]["output_transfer"]["read_files"]["available"])
+        jobs = result["output_transfer"]["observe_jobs"]
+        self.assertEqual((jobs["calls"], jobs["measured_calls"]), (1, 0))
+        self.assertEqual(jobs["metrics"]["reset_log_bytes"]["missing"], 1)
+        self.assertIsNone(jobs["metrics"]["reset_log_bytes"]["total"])
+        self.assertFalse(result["availability"]["output_transfer"]["observe_jobs"]["available"])
+
+    def test_output_transfer_trace_only_and_absent_call_lanes_are_unavailable(self) -> None:
+        trace, availability = report._summarize_output_transfer(
+            [], action_audit_available=False
+        )
+        for tool in ("read_files", "observe_jobs"):
+            self.assertIsNone(trace[tool]["calls"])
+            self.assertIsNone(trace[tool]["measured_calls"])
+            self.assertIsNone(trace[tool]["metrics"]["items"]["total"])
+            self.assertFalse(availability[tool]["available"])
+        no_calls, unavailable = report._summarize_output_transfer(
+            [{"action_name": "toolsCall", "operation": "run_shell"}],
+            action_audit_available=True,
+        )
+        for tool in ("read_files", "observe_jobs"):
+            self.assertEqual(no_calls[tool]["calls"], 0)
+            self.assertIsNone(no_calls[tool]["metrics"]["items"]["total"])
+            self.assertFalse(unavailable[tool]["available"])
+
     def test_edit_outcomes_are_aggregated_from_authoritative_telemetry(self) -> None:
         self.insert_event(
             "applied",
@@ -829,7 +923,7 @@ class AgentLoopReportTests(unittest.TestCase):
             transition="serial",
             window="hashed-window-a",
         )
-        with sqlite3.connect(self.audit_db) as connection:
+        with closing(sqlite3.connect(self.audit_db)) as connection, connection:
             connection.execute(
                 "UPDATE action_events SET summary_json = 'not-json' WHERE event_id = 'other-session'"
             )
@@ -1823,7 +1917,7 @@ class AgentLoopReportTests(unittest.TestCase):
         values = [JobConvergenceTests.row(1, kind="pending_handoff"),
                   JobConvergenceTests.row(2, 1, "explicit_observe", terminal=2000),
                   JobConvergenceTests.row(3, 2)]
-        with sqlite3.connect(self.audit_db) as connection:
+        with closing(sqlite3.connect(self.audit_db)) as connection, connection:
             for row in values:
                 connection.execute("UPDATE action_events SET summary_json = ? WHERE event_id = ?",
                                    (json.dumps(row["summary"]), row["event_id"]))
@@ -1840,7 +1934,7 @@ class AgentLoopReportTests(unittest.TestCase):
         terminal = JobConvergenceTests.row(2, 1, "passive_terminal", failure=True, terminal=2000)
         terminal["summary"]["model_ergonomics"]["job_convergence"]["events"][0]["validation_failure"] = True
         observe = JobConvergenceTests.row(3, 2, "explicit_observe", terminal=2000)
-        with sqlite3.connect(self.audit_db) as connection:
+        with closing(sqlite3.connect(self.audit_db)) as connection, connection:
             for row in [pending, terminal, observe]:
                 connection.execute("UPDATE action_events SET summary_json = ? WHERE event_id = ?",
                                    (json.dumps(row["summary"]), row["event_id"]))
@@ -1849,6 +1943,71 @@ class AgentLoopReportTests(unittest.TestCase):
         self.assertEqual(result["terminal_failure_followed_by_observe_count"], 1)
         self.assertEqual(result["terminal_validation_failure_followed_by_observe_count"], 1)
 
+
+    def test_result_bytes_by_tool_reports_complete_and_incomplete_groups(self) -> None:
+        self.insert_event("read-a", tool="read_files", result_bytes=120)
+        self.insert_event("cargo", tool="cargo_test", status="failed", success=False,
+                          result_bytes=80, started=140, handed=160)
+        self.insert_event("read-b", tool="read_files", result_bytes=180,
+                          started=170, handed=190)
+        self.insert_event("read-missing", tool="read_files", result_bytes=None,
+                          started=200, handed=220)
+        self.insert_event("not-selected", session="wc_sess_other",
+                          tool="apply_text_edits", result_bytes=9000)
+        report_data = self.summarize()
+        by_tool = report_data["results"]["serialized_tool_result_bytes_by_tool"]
+        self.assertEqual(list(by_tool), ["cargo_test", "read_files"])
+        self.assertEqual(by_tool["cargo_test"], {
+            "total": 80, "observed_total": 80, "p50": 80, "p95": 80,
+            "samples": 1, "missing": 0,
+        })
+        self.assertEqual(by_tool["read_files"]["observed_total"], 300)
+        self.assertEqual(by_tool["read_files"]["samples"], 2)
+        self.assertEqual(by_tool["read_files"]["missing"], 1)
+        self.assertIsNone(by_tool["read_files"]["total"])
+        self.assertEqual(by_tool["read_files"]["p50"], 120)
+        self.assertEqual(by_tool["read_files"]["p95"], 180)
+        availability = report_data["availability"]["serialized_tool_result_bytes_by_tool"]
+        self.assertFalse(availability["available"])
+        self.assertEqual(availability["unattributed_calls"], 0)
+
+    def test_result_bytes_by_tool_invalid_sizes_do_not_count_as_zero(self) -> None:
+        self.insert_event("bool", tool="read_files", result_bytes=True)
+        self.insert_event("overflow", tool="read_files", result_bytes=1 << 64,
+                          started=150, handed=170)
+        self.insert_event("negative", tool="read_files", result_bytes=-1,
+                          started=200, handed=220)
+        self.insert_event("valid-zero", tool="run_shell", result_bytes=0,
+                          started=240, handed=260)
+        result = self.summarize()
+        by_tool = result["results"]["serialized_tool_result_bytes_by_tool"]
+        self.assertEqual(by_tool["read_files"]["samples"], 0)
+        self.assertEqual(by_tool["read_files"]["missing"], 3)
+        self.assertIsNone(by_tool["read_files"]["total"])
+        self.assertEqual(by_tool["run_shell"]["total"], 0)
+        self.assertFalse(result["availability"]["serialized_tool_result_bytes_by_tool"]["available"])
+
+    def test_result_bytes_by_tool_unattributed_and_trace_only_unavailable(self) -> None:
+        grouped, availability = report._summarize_result_bytes_by_tool([
+            {"action_name": "toolsCall", "operation": None,
+             "summary": {"model_ergonomics": {"serialized_result_bytes": 77}}},
+            {"action_name": "toolsCall", "operation": "read_files",
+             "summary": {"model_ergonomics": {"serialized_result_bytes": 17}}},
+        ], action_audit_available=True)
+        self.assertEqual(grouped["read_files"]["total"], 17)
+        self.assertFalse(availability["available"])
+        self.assertEqual(availability["unattributed_calls"], 1)
+        empty, unavailable = report._summarize_result_bytes_by_tool(
+            [], action_audit_available=True
+        )
+        self.assertEqual(empty, {})
+        self.assertFalse(unavailable["available"])
+        trace, unavailable = report._summarize_result_bytes_by_tool(
+            [], action_audit_available=False
+        )
+        self.assertEqual(trace, {})
+        self.assertIsNone(unavailable["unattributed_calls"])
+        self.assertFalse(unavailable["available"])
 
 class JobConvergenceTests(unittest.TestCase):
     @staticmethod

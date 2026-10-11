@@ -115,7 +115,7 @@ fn run_native_shell_or_internal_search(
             ));
         };
         #[cfg(windows)]
-        if let Some(result) = super::run_windows_native_single_file_search_with_profiles(
+        if let Some(result) = super::run_windows_native_search_with_profiles(
             config.generation,
             &config.policy,
             &config.shell,

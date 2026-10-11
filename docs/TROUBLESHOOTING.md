@@ -296,9 +296,27 @@ accept their retired names.
 
 ### MCP tool list looks stale
 
-Reconnect or restart the MCP client so it runs a fresh `initialize` and
-`tools/list`. If the server was just upgraded, verify public HTTPS reaches the
-new service and check `journalctl -u webcodex` for startup or auth errors.
+Compare the Host's loaded tool names and input fields with a fresh `tools/list`
+from the same authenticated endpoint and protocol. Matching Server/Runner builds
+alone does not prove that the Host loaded the current contract. Current names
+include `read_tool_manifest`, `get_runtime_status`, and `edit_project_files`;
+Stateless 2026 invocation metadata belongs in outer `_wc`, not the retired flat
+`recording_session_id` wrapper. `work_on_project` no longer accepts
+`include_project_instructions` or `include_workflow_guidance`.
+
+For a custom MCP server connected directly in ChatGPT, refresh the connection's
+metadata, confirm that the advertised contract changed, and test in a new
+conversation. Published plugins use a different tool-update review flow; see
+OpenAI's [metadata refresh instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata).
+Other MCP clients should reconnect or rediscover according to their protocol.
+After a server upgrade, also verify that public HTTPS reaches the new service.
+Do not assume that restarting the Runner refreshes a Host's cached tools.
+
+An unavailable or retired tool has no valid gateway retry. Refresh discovery and
+select a current callable; never guess a renamed tool or replay a write through a
+fallback. A known gateway-only tool may use `call_runtime_tool` only with its
+current canonical arguments and normal authorization. Server-side contract tests
+cannot certify a particular Host's cache or published plugin state.
 
 ### Runner is offline
 

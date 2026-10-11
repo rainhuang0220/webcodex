@@ -123,10 +123,8 @@ impl RuntimeSurface {
             agent_continuation_app_admitted && is_agent_continuation_app_tool_name(&params.name);
         let app_only_job_terminal_continuation = job_terminal_continuation_app_admitted
             && is_job_terminal_continuation_app_tool_name(&params.name);
-        let protocol_extension_admitted = stateless_2026
-            && crate::tool_runtime::stateless_operator_extension_tool_specs()
-                .iter()
-                .any(|spec| spec.name == params.name);
+        let protocol_extension_admitted =
+            stateless_2026 && runtime_tool_operator_extension_family(&params.name).is_some();
         let workbench_view_call = server_mcp_apps_enabled
             && stateless_2026
             && matches!(
@@ -153,14 +151,30 @@ impl RuntimeSurface {
                 lc.dispatch_failed("direct_route_denied");
                 lc.dispatch_finished(false, Some(false), "direct_route_denied");
             }
-            return Err(McpOutcome::BadRequest(rpc_error(
-            id,
-            -32602,
-            format!(
-                "tool '{}' is not directly callable on Adaptive Runtime; use call_runtime_tool for admitted model-visible long-tail tools",
-                params.name
-            ),
-        )));
+            // A recovery hint must name a real, currently admitted route. Retired
+            // names and unavailable App tools cannot become valid through a gateway.
+            let message = if mcp_adaptive_runtime_gateway_target_route(&params.name, stateless_2026)
+                != crate::model_surface::AdaptiveRuntimeGatewayTargetRoute::Gateway
+            {
+                format!(
+                    "tool '{}' is unavailable on the current MCP surface; refresh tools/list and select a current callable",
+                    params.name
+                )
+            } else if !crate::tool_runtime::kernel::runtime_tool_scope_allows_discovery(
+                auth,
+                &params.name,
+            ) {
+                format!(
+                    "tool '{}' is unavailable under the current authorization; check granted scopes and current tools/list",
+                    params.name
+                )
+            } else {
+                format!(
+                    "tool '{}' is not directly callable on Adaptive Runtime; use call_runtime_tool with its current canonical arguments and normal authorization",
+                    params.name
+                )
+            };
+            return Err(McpOutcome::BadRequest(rpc_error(id, -32602, message)));
         }
 
         Ok(Self {

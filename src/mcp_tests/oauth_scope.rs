@@ -801,10 +801,10 @@ async fn oauth2_mcp_unknown_tool_fails_closed() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body:?}");
     assert_eq!(body["error"]["code"], -32602);
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap_or("")
-        .contains("call_runtime_tool"));
+    let message = body["error"]["message"].as_str().unwrap_or("");
+    assert!(message.contains("unavailable"), "{message}");
+    assert!(message.contains("tools/list"), "{message}");
+    assert!(!message.contains("call_runtime_tool"), "{message}");
     assert!(challenge.is_none());
 }
 

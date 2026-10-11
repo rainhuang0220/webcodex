@@ -28,6 +28,8 @@ reconstruct full input/output schema trees merely to read metadata.
 | Filtered model-facing description projection | No input/output schemas |
 | Summary-only list_tools | No input/output schemas |
 | Full list_tools with a limit/filter | Full specs only for selected returned tools |
+| Compact MCP tools/list, including authorized App helpers | One input schema per selected canonical tool, no output schemas |
+| Explicit full MCP tools/list | Full specs only for selected authorized tools |
 | Explicit experimental Code Mode callable contract | Full contracts required by that optional nested surface |
 
 The canonical input-schema implementation already has a process-local OnceLock
@@ -35,6 +37,16 @@ cache derived from the full ToolCall enum. This patch does not change that cache
 or claim that the first cold request derives only one enum variant. The counts
 above concern requested materialization/cloning and output-schema construction,
 not hidden work inside canonical schema generation.
+
+MCP tools/list now selects the canonical Direct inventory, protocol extensions,
+and App helpers before schema construction. OAuth discovery and App capability
+gates, inventory order, input overlays, annotations, and resource metadata stay
+at their existing adapter boundaries. Compact rendering constructs only the
+selected input contracts; explicit full rendering still projects canonical
+output schemas, suggested calls, and native-image delivery. The Work Result
+Host launcher retains its separate nullable output contract only in full mode.
+The fixed App descriptor factories share their descriptions with the existing
+full-spec factories rather than introducing another catalog or cache.
 
 A test-thread-local counter protects these boundaries without production metrics
 or timing thresholds. Existing schema, extension, authority and route tests

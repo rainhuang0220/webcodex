@@ -1,4 +1,24 @@
 use serde_json::{json, Value};
+use std::{borrow::Cow, collections::HashMap, sync::OnceLock};
+
+// The finite canonical name set owns lazy slots; request-supplied unknown names
+// never allocate retained entries. This stores only pure schema data, not routes
+// or authorization. Each selected schema is materialized on its first use.
+static OUTPUT_SCHEMAS: OnceLock<HashMap<&'static str, OnceLock<Value>>> = OnceLock::new();
+
+/// Borrow a canonical immutable contract without cloning its JSON tree. Unknown
+/// names preserve the existing uncached fallback and cannot grow the cache.
+pub fn shared_output_schema_for_tool(name: &str) -> Cow<'static, Value> {
+    let slots = OUTPUT_SCHEMAS.get_or_init(|| {
+        crate::tool_definition::tool_definitions()
+            .map(|definition| (definition.name, OnceLock::new()))
+            .collect()
+    });
+    match slots.get(name) {
+        Some(slot) => Cow::Borrowed(slot.get_or_init(|| build_output_schema_for_tool(name))),
+        None => Cow::Owned(build_output_schema_for_tool(name)),
+    }
+}
 
 mod agent_tasks;
 mod agent_waits;
@@ -155,6 +175,10 @@ fn base_output_schema_for_tool(name: &str) -> Value {
 }
 
 pub fn output_schema_for_tool(name: &str) -> Value {
+    shared_output_schema_for_tool(name).into_owned()
+}
+
+fn build_output_schema_for_tool(name: &str) -> Value {
     let mut schema = base_output_schema_for_tool(name);
     if crate::runtime_tool_supports_passive_job_attention(name) {
         common::add_passive_job_attention_to_envelope(&mut schema);
@@ -166,3 +190,6 @@ pub fn output_schema_for_tool(name: &str) -> Value {
 pub fn coding_workflow_diagnostic_output_schema_for_test() -> Value {
     coding_tasks::coding_workflow_diagnostic_output_schema()
 }
+
+#[cfg(test)]
+mod cache_tests;

@@ -29,47 +29,10 @@ const SEARCH_PROJECT_TEXT_EXCLUDES: &[&str] = &[
     "--exclude=*.key",
 ];
 
-const SEARCH_PROJECT_TEXT_RG_EXCLUDE_GLOBS: &[&str] = &[
-    "!.git/**",
-    "!**/.git/**",
-    "!.claude/**",
-    "!**/.claude/**",
-    "!target/**",
-    "!**/target/**",
-    "!node_modules/**",
-    "!**/node_modules/**",
-    "!**/.venv/**",
-    "!**/venv/**",
-    "!**/__pycache__/**",
-    "!**/.pytest_cache/**",
-    "!**/.mypy_cache/**",
-    "!**/.ruff_cache/**",
-    "!**/.tox/**",
-    "!**/site-packages/**",
-    "!**/.ipynb_checkpoints/**",
-    "!**/dist/**",
-    "!**/build/**",
-    "!**/coverage/**",
-    "!**/.next/**",
-    "!secrets/**",
-    "!**/secrets/**",
-    "!tokens/**",
-    "!**/tokens/**",
-    "!.env",
-    "!**/.env",
-    "!.env.*",
-    "!**/.env.*",
-    "!runner.toml",
-    "!**/runner.toml",
-    "!agent.toml",
-    "!**/agent.toml",
-    "!webcodex.env",
-    "!**/webcodex.env",
-    "!*.pem",
-    "!**/*.pem",
-    "!*.key",
-    "!**/*.key",
-];
+use webcodex_core::project_search::{
+    project_text_search_line_budget,
+    PROJECT_TEXT_SEARCH_EXCLUDE_GLOBS as SEARCH_PROJECT_TEXT_RG_EXCLUDE_GLOBS,
+};
 
 pub(crate) use webcodex_tool_contracts::MAX_SEARCH_CONTEXT_LINES;
 pub(crate) const MAX_SEARCH_GLOBS: usize = 32;
@@ -569,23 +532,16 @@ exit "$status""#,
 /// transport cap while still leaving useful room for the bounded marker and
 /// result metadata. The test harness drains subprocess pipes concurrently, so
 /// this production budget does not depend on host-specific pipe capacity.
-pub(crate) const SEARCH_OUTPUT_BYTE_BUDGET: usize = 32 * 1024;
+pub(crate) const SEARCH_OUTPUT_BYTE_BUDGET: usize =
+    webcodex_core::project_search::PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET;
 
 fn search_output_line_budget(options: &SearchOptions) -> usize {
-    let result_budget = options.limit.saturating_add(1);
-    if options.result_mode != SearchResultMode::Matches {
-        return result_budget;
-    }
-    if options.context_before == 0 && options.context_after == 0 {
-        return result_budget;
-    }
-    let context_budget = options
-        .context_before
-        .saturating_add(options.context_after)
-        .saturating_add(2);
-    result_budget
-        .saturating_mul(context_budget)
-        .saturating_add(1)
+    project_text_search_line_budget(
+        options.limit,
+        options.result_mode == SearchResultMode::Matches,
+        options.context_before,
+        options.context_after,
+    )
 }
 
 fn escape_search_literal_for_regex(pattern: &str) -> String {

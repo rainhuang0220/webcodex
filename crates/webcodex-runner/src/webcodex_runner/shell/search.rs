@@ -1,4 +1,4 @@
-//! Native Windows interpreter and single-file search fallback.
+//! Native Windows interpreter and bounded project search fallback.
 
 use super::*;
 
@@ -88,28 +88,48 @@ pub(super) fn resolve_windows_internal_posix_interpreter(
 
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct NativeSingleFileSearchSpec {
+pub(super) struct NativeSearchSpec {
     pub(super) path: String,
     pub(super) args: Vec<String>,
+    pub(super) line_limit: usize,
 }
 
 #[cfg(windows)]
-pub(super) fn native_single_file_search_spec(payload: &str) -> Option<NativeSingleFileSearchSpec> {
+pub(super) fn native_search_spec(payload: &str) -> Option<NativeSearchSpec> {
+    use webcodex_core::project_search::{
+        project_text_search_line_budget, PROJECT_TEXT_SEARCH_EXCLUDE_GLOBS,
+    };
     let payload: serde_json::Value = serde_json::from_str(payload).ok()?;
     let object = payload.as_object()?;
     let path = object.get("path")?.as_str()?.trim();
-    if path.is_empty() || Path::new(path).is_absolute() {
+    if path.is_empty()
+        || path.contains('\0')
+        || Path::new(path).components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+                    | std::path::Component::ParentDir
+            )
+        })
+    {
         return None;
     }
-    let globs_empty = |field: &str| {
-        object
-            .get(field)
-            .map(|value| value.is_null() || value.as_array().is_some_and(Vec::is_empty))
-            .unwrap_or(true)
+    let globs = |field: &str| -> Option<Vec<&str>> {
+        match object.get(field) {
+            None | Some(serde_json::Value::Null) => Some(Vec::new()),
+            Some(value) => value
+                .as_array()?
+                .iter()
+                .map(|value| {
+                    let glob = value.as_str()?;
+                    (!glob.is_empty() && !glob.contains('\0')).then_some(glob)
+                })
+                .collect(),
+        }
     };
-    if !globs_empty("include_globs") || !globs_empty("exclude_globs") {
-        return None;
-    }
+    let include = globs("include_globs")?;
+    let exclude = globs("exclude_globs")?;
 
     let pattern = object.get("pattern")?.as_str()?;
     let limit = usize::try_from(object.get("limit")?.as_u64()?).ok()?.max(1);
@@ -129,8 +149,6 @@ pub(super) fn native_single_file_search_spec(payload: &str) -> Option<NativeSing
                 before.to_string(),
                 "-A".to_string(),
                 after.to_string(),
-                "--max-count".to_string(),
-                limit.saturating_add(1).to_string(),
             ]);
         }
         "files_with_matches" => args.push("--files-with-matches".to_string()),
@@ -147,20 +165,34 @@ pub(super) fn native_single_file_search_spec(payload: &str) -> Option<NativeSing
         "--hidden".to_string(),
         "--path-separator".to_string(),
         "/".to_string(),
+    ]);
+    for glob in include {
+        args.extend(["--glob".to_string(), glob.to_string()]);
+    }
+    for glob in exclude {
+        args.extend(["--glob".to_string(), format!("!{glob}")]);
+    }
+    // Last matching glob wins in rg. Mandatory exclusions remain last, just
+    // like the generated POSIX backend, so user globs cannot override them.
+    for glob in PROJECT_TEXT_SEARCH_EXCLUDE_GLOBS {
+        args.extend(["--glob".to_string(), (*glob).to_string()]);
+    }
+    args.extend([
         "-e".to_string(),
         pattern.to_string(),
         "--".to_string(),
         path.to_string(),
     ]);
-    Some(NativeSingleFileSearchSpec {
+    Some(NativeSearchSpec {
         path: path.to_string(),
         args,
+        line_limit: project_text_search_line_budget(limit, result_mode == "matches", before, after),
     })
 }
 
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_windows_native_single_file_search_with_profiles(
+pub(crate) fn run_windows_native_search_with_profiles(
     generation: u64,
     policy: &RunnerPolicy,
     shell: &ShellConfig,
@@ -171,7 +203,18 @@ pub(crate) fn run_windows_native_single_file_search_with_profiles(
     timeout_secs: u64,
     stop_requested: Option<&AtomicBool>,
 ) -> Option<ShellCommandResult> {
-    let spec = native_single_file_search_spec(payload?)?;
+    use webcodex_core::project_search::PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET;
+    const MARKER: &str =
+        "{\"webcodex_search\":{\"backend\":\"rg\",\"feature_unavailable\":false}}\n";
+    // Native execution has the same policy gate as generated internal POSIX
+    // programs. Small transport budgets keep the existing fallback behavior.
+    if !policy.allow_raw_shell
+        || policy.max_output_bytes < MARKER.len() + PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET + 4
+    {
+        return None;
+    }
+    let spec = native_search_spec(payload?)?;
+    let timeout_secs = timeout_secs.min(policy.max_timeout_secs).max(1);
     let cwd_path = cwd
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
@@ -180,7 +223,7 @@ pub(crate) fn run_windows_native_single_file_search_with_profiles(
     }
     let canonical_cwd = canonicalize_existing(&cwd_path).ok()?;
     let canonical_target = canonicalize_existing(&cwd_path.join(&spec.path)).ok()?;
-    if !canonical_target.is_file()
+    if !(canonical_target.is_file() || canonical_target.is_dir())
         || !webcodex_runner_config::paths::path_is_within(&canonical_target, &canonical_cwd)
     {
         return None;
@@ -214,7 +257,7 @@ pub(crate) fn run_windows_native_single_file_search_with_profiles(
         }
     }
     let start = Instant::now();
-    let mut result = execute_configured_command(
+    let mut result = super::execution::execute_configured_command_with_prefix(
         policy,
         command,
         &cwd_path,
@@ -224,6 +267,10 @@ pub(crate) fn run_windows_native_single_file_search_with_profiles(
         start,
         "failed to spawn native ripgrep search",
         None,
+        Some(super::drains::StdoutPrefixLimit {
+            lines: spec.line_limit,
+            bytes: PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET + 1,
+        }),
     );
     if result.execution_state == ShellCommandExecutionState::NotStarted {
         return None;
@@ -232,8 +279,6 @@ pub(crate) fn run_windows_native_single_file_search_with_profiles(
         return None;
     }
     if result.execution_state == ShellCommandExecutionState::Completed {
-        const MARKER: &str =
-            "{\"webcodex_search\":{\"backend\":\"rg\",\"feature_unavailable\":false}}\n";
         let stdout = result.result.stdout.take().unwrap_or_default();
         if MARKER.len().saturating_add(stdout.len()) > policy.max_output_bytes {
             return None;

@@ -194,7 +194,7 @@ fn internal_posix_interpreter_rejects_wsl_only_bash() {
 
 #[cfg(windows)]
 #[test]
-fn native_single_file_search_spec_builds_bounded_rg_argv() {
+fn native_search_spec_builds_bounded_rg_argv() {
     let payload = serde_json::json!({
         "pattern": "needle\\.literal",
         "path": "src/lib.rs",
@@ -207,12 +207,10 @@ fn native_single_file_search_spec_builds_bounded_rg_argv() {
         "timeout_secs": 30
     })
     .to_string();
-    let spec = native_single_file_search_spec(&payload).expect("eligible single-file search");
+    let spec = native_search_spec(&payload).expect("eligible single-file search");
     assert_eq!(spec.path, "src/lib.rs");
-    assert!(spec
-        .args
-        .windows(2)
-        .any(|pair| pair == ["--max-count", "8"]));
+    assert_eq!(spec.line_limit, 73);
+    assert!(!spec.args.iter().any(|arg| arg == "--max-count"));
     assert!(spec.args.windows(2).any(|pair| pair == ["-B", "3"]));
     assert!(spec.args.windows(2).any(|pair| pair == ["-A", "4"]));
     assert!(spec
@@ -224,13 +222,13 @@ fn native_single_file_search_spec_builds_bounded_rg_argv() {
 
 #[cfg(windows)]
 #[test]
-fn native_single_file_search_count_keeps_filename_for_parser() {
+fn native_search_count_keeps_filename_for_parser() {
     let payload = serde_json::json!({
         "pattern": "needle", "path": "file.txt", "limit": 8,
         "context_before": 0, "context_after": 0, "result_mode": "count"
     })
     .to_string();
-    let spec = native_single_file_search_spec(&payload).unwrap();
+    let spec = native_search_spec(&payload).unwrap();
     assert!(spec.args.iter().any(|arg| arg == "--with-filename"));
     assert!(spec.args.iter().any(|arg| arg == "--null"));
 }
@@ -238,7 +236,7 @@ fn native_single_file_search_count_keeps_filename_for_parser() {
 #[cfg(all(windows, feature = "runner-real-process-tests"))]
 #[test]
 #[ignore = "requires native rg.exe; run explicitly for Windows search validation"]
-fn runner_real_process_native_single_file_search_preserves_modes_and_fallback() {
+fn runner_real_process_native_search_preserves_modes_and_fallback() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -259,7 +257,7 @@ fn runner_real_process_native_single_file_search_preserves_modes_and_fallback() 
         })
     };
     let run = |payload: &serde_json::Value| {
-        run_windows_native_single_file_search_with_profiles(
+        run_windows_native_search_with_profiles(
             1,
             &policy,
             &shell,
@@ -304,29 +302,30 @@ fn runner_real_process_native_single_file_search_preserves_modes_and_fallback() 
     let empty = run(&payload("matches", "absent", path)).unwrap();
     assert_eq!(empty.result.exit_code, Some(1));
     assert_eq!(empty.result.stdout.unwrap().lines().count(), 1);
-    for fallback_path in [".", "missing.txt", "../outside.txt"] {
+    for fallback_path in ["missing.txt", "../outside.txt"] {
         assert!(run(&payload("matches", "needle", fallback_path)).is_none());
     }
     let mut glob = payload("matches", "needle", path);
     glob["include_globs"] = serde_json::json!(["*.txt"]);
-    assert!(run(&glob).is_none());
+    assert!(run(&glob).is_some());
+    assert!(run(&payload("matches", "needle", ".")).is_some());
 }
 
 #[cfg(windows)]
 #[test]
-fn native_single_file_search_spec_rejects_globs_and_absolute_paths() {
+fn native_search_spec_rejects_malformed_globs_and_absolute_paths() {
     let with_glob = serde_json::json!({
         "pattern": "needle",
         "path": "src/lib.rs",
         "limit": 1,
         "context_before": 0,
         "context_after": 0,
-        "include_globs": ["*.rs"],
+        "include_globs": [42],
         "exclude_globs": [],
         "result_mode": "matches"
     })
     .to_string();
-    assert!(native_single_file_search_spec(&with_glob).is_none());
+    assert!(native_search_spec(&with_glob).is_none());
 
     let absolute = serde_json::json!({
         "pattern": "needle",
@@ -339,7 +338,290 @@ fn native_single_file_search_spec_rejects_globs_and_absolute_paths() {
         "result_mode": "matches"
     })
     .to_string();
-    assert!(native_single_file_search_spec(&absolute).is_none());
+    assert!(native_search_spec(&absolute).is_none());
+}
+
+#[test]
+fn native_search_prefix_bounds_lines_bytes_and_utf8() {
+    use super::drains::{read_bounded_search_prefix, StdoutPrefixLimit};
+    for (input, lines, bytes, expected) in [
+        (
+            b"one\ntwo\nthree\n".as_slice(),
+            2,
+            100,
+            b"one\ntwo\n".as_slice(),
+        ),
+        (b"abcdefghijk".as_slice(), 5, 4, b"abcd".as_slice()),
+        (b"short".as_slice(), 5, 100, b"short".as_slice()),
+    ] {
+        let reached = AtomicBool::new(false);
+        let captured = read_bounded_search_prefix(
+            std::io::Cursor::new(input),
+            StdoutPrefixLimit { lines, bytes },
+            &reached,
+        )
+        .unwrap();
+        assert_eq!(captured.bytes, expected);
+        assert_eq!(
+            reached.load(Ordering::SeqCst),
+            expected.len() != input.len()
+        );
+        assert!(!captured.raw_truncated);
+    }
+    let reached = AtomicBool::new(false);
+    let captured = read_bounded_search_prefix(
+        std::io::Cursor::new("中文".as_bytes()),
+        StdoutPrefixLimit { lines: 2, bytes: 4 },
+        &reached,
+    )
+    .unwrap();
+    assert_eq!(captured.normalize_as_windows_for_test(100), "中�");
+    assert!(reached.load(Ordering::SeqCst));
+    let input = format!("{}\nsecond\nthird", "x".repeat(8192));
+    let captured = read_bounded_search_prefix(
+        std::io::Cursor::new(input.as_bytes()),
+        StdoutPrefixLimit {
+            lines: 2,
+            bytes: 20_000,
+        },
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(
+        captured.bytes,
+        format!("{}\nsecond\n", "x".repeat(8192)).as_bytes()
+    );
+}
+
+#[cfg(all(windows, feature = "runner-real-process-tests"))]
+#[test]
+#[ignore = "requires native rg.exe; run explicitly for Windows search validation"]
+fn runner_real_process_native_search_directory_globs_and_bounds() {
+    use webcodex_core::project_search::PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET;
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join("src/deep")).unwrap();
+    for path in [
+        "src/代码 file.rs",
+        "src/deep/keep.rs",
+        "src/deep/skip.rs",
+        "src/other.txt",
+        ".git/private.rs",
+        "node_modules/private.rs",
+        "secrets/private.rs",
+        "tokens/private.rs",
+        ".env",
+        "src/key.pem",
+        "src/runner.toml",
+    ] {
+        let file = project.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "before\r\nneedle.literal\r\nafter\r\n").unwrap();
+    }
+    let policy = unrestricted_policy();
+    let shell = ShellConfig::default();
+    let cache = PreparedShellProfileCache::default();
+    let run = |policy: &RunnerPolicy,
+               shell: &ShellConfig,
+               payload: &serde_json::Value,
+               stopped: Option<&AtomicBool>| {
+        run_windows_native_search_with_profiles(
+            1,
+            policy,
+            shell,
+            root.path(),
+            &cache,
+            Some(project.to_str().unwrap()),
+            Some(&payload.to_string()),
+            10,
+            stopped,
+        )
+    };
+    let mut payload = serde_json::json!({"pattern": "needle\\.literal", "path": ".", "limit": 20, "context_before": 0, "context_after": 0, "include_globs": ["**/*.rs"], "exclude_globs": ["**/skip.rs"], "result_mode": "matches"});
+    for mode in ["matches", "files_with_matches", "count"] {
+        payload["result_mode"] = serde_json::json!(mode);
+        let result = run(&policy, &shell, &payload, None).expect("native rg.exe must be available");
+        assert_eq!(result.result.exit_code, Some(0), "{result:?}");
+        let stdout = result.result.stdout.unwrap();
+        let records = stdout.lines().skip(1).collect::<Vec<_>>();
+        assert_eq!(records.len(), 2, "{mode}: {records:?}");
+        assert!(records.iter().any(|line| line.contains("src/代码 file.rs")));
+        assert!(records.iter().any(|line| line.contains("src/deep/keep.rs")));
+        // Exercise the existing Git Bash/head boundary on the same small
+        // fixture; traversal order is not a public search contract.
+        let spec = native_search_spec(&payload.to_string()).unwrap();
+        let mut fallback_args = spec.args.clone();
+        let separator = fallback_args
+            .iter()
+            .position(|arg| arg == "--path-separator")
+            .unwrap();
+        // The generated Bash backend omits this native-only flag. MSYS expands
+        // '/' into its installation path before passing it to a Windows exe.
+        fallback_args.drain(separator..separator + 2);
+        let argv = fallback_args
+            .iter()
+            .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let fallback = run_internal_search_script_with_profiles_and_execution_state(
+            1,
+            &policy,
+            &shell,
+            root.path(),
+            &cache,
+            Some(project.to_str().unwrap()),
+            &format!(
+                "set -o pipefail\nrg {argv} | head -n {} | head -c {}",
+                spec.line_limit,
+                PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET + 1
+            ),
+            10,
+            None,
+        );
+        assert_eq!(
+            fallback.execution_state,
+            ShellCommandExecutionState::Completed,
+            "{fallback:?}"
+        );
+        assert_eq!(fallback.result.exit_code, Some(0), "{fallback:?}");
+        let mut native_lines = records
+            .iter()
+            .map(|line| line.replace('\\', "/"))
+            .collect::<Vec<_>>();
+        native_lines.sort_unstable();
+        let mut fallback_lines = fallback
+            .result
+            .stdout
+            .as_deref()
+            .unwrap()
+            .lines()
+            .map(|line| line.replace('\\', "/"))
+            .collect::<Vec<_>>();
+        fallback_lines.sort_unstable();
+        assert_eq!(
+            native_lines, fallback_lines,
+            "native and Git Bash outputs differ for {mode}"
+        );
+        eprintln!(
+            "windows_native_directory mode={mode} native_ms={:?} bash_ms={:?}",
+            result.result.duration_ms, fallback.result.duration_ms
+        );
+    }
+    payload["include_globs"] = serde_json::json!(["**/*"]);
+    payload["result_mode"] = serde_json::json!("files_with_matches");
+    let result = run(&policy, &shell, &payload, None).unwrap();
+    assert_eq!(
+        result.result.stdout.unwrap().lines().skip(1).count(),
+        3,
+        "mandatory exclusions must win over broad includes"
+    );
+    payload["path"] = serde_json::json!("src/代码 file.rs");
+    payload["result_mode"] = serde_json::json!("matches");
+    payload["context_before"] = serde_json::json!(1);
+    payload["context_after"] = serde_json::json!(1);
+    let result = run(&policy, &shell, &payload, None).unwrap();
+    let stdout = result.result.stdout.unwrap();
+    assert!(stdout.contains(&format!("代码 file.rs\0{}:needle.literal", 2)));
+    assert!(stdout.contains(&format!("代码 file.rs\0{}-before", 1)));
+    assert!(stdout.contains(&format!("代码 file.rs\0{}-after", 3)));
+    payload["path"] = serde_json::json!(".");
+    payload["limit"] = serde_json::json!(1);
+    payload["context_before"] = serde_json::json!(0);
+    payload["context_after"] = serde_json::json!(0);
+    for mode in ["matches", "files_with_matches", "count"] {
+        payload["result_mode"] = serde_json::json!(mode);
+        let result = run(&policy, &shell, &payload, None).unwrap();
+        assert_eq!(result.result.exit_code, Some(0), "{result:?}");
+        assert_eq!(
+            result.result.stdout.unwrap().lines().count(),
+            3,
+            "global limit plus one probe record, {mode}"
+        );
+        assert!(!result.stdout_truncated);
+    }
+    std::fs::write(
+        project.join("long.txt"),
+        format!(
+            "needle.literal{}",
+            "中".repeat(PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET)
+        ),
+    )
+    .unwrap();
+    payload["path"] = serde_json::json!("long.txt");
+    payload["result_mode"] = serde_json::json!("matches");
+    let result = run(&policy, &shell, &payload, None).unwrap();
+    let body = result
+        .result
+        .stdout
+        .unwrap()
+        .split_once('\n')
+        .unwrap()
+        .1
+        .to_string();
+    assert!(body.len() > PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET);
+    assert!(body.len() <= PROJECT_TEXT_SEARCH_OUTPUT_BYTE_BUDGET + 3);
+    assert_eq!(result.result.exit_code, Some(0));
+    assert!(!result.stdout_truncated);
+    let stopped = AtomicBool::new(true);
+    let result = run(&policy, &shell, &payload, Some(&stopped)).unwrap();
+    assert_eq!(result.result.error.as_deref(), Some("job stopped"));
+    let mut denied = policy.clone();
+    denied.allow_raw_shell = false;
+    assert!(run(&denied, &shell, &payload, None).is_none());
+    denied = policy.clone();
+    denied.allow_cwd_anywhere = false;
+    denied.allowed_roots = vec![root.path().join("other")];
+    assert!(run(&denied, &shell, &payload, None).is_none());
+    let mut missing_rg = shell.clone();
+    missing_rg
+        .env
+        .insert("PATH".into(), root.path().to_string_lossy().into_owned());
+    assert!(run(&policy, &missing_rg, &payload, None).is_none());
+}
+
+#[cfg(feature = "runner-real-process-tests")]
+#[test]
+#[ignore = "real child-process timeout and cleanup; run explicitly with runner-real-process-tests"]
+fn runner_real_process_native_search_prefix_executor_preserves_lifecycle() {
+    let cwd = tempfile::tempdir().unwrap();
+    let helper = process_argv_helper();
+    let run = |args: &[&str], timeout: u64, stopped: Option<&AtomicBool>| {
+        let mut command = Command::new(&helper);
+        command.args(args);
+        super::execution::execute_configured_command_with_prefix(
+            &unrestricted_policy(),
+            command,
+            cwd.path(),
+            None,
+            timeout,
+            stopped,
+            Instant::now(),
+            "failed to spawn search fixture",
+            None,
+            Some(super::drains::StdoutPrefixLimit {
+                lines: 2,
+                bytes: 1024,
+            }),
+        )
+    };
+    let timed_out = run(&["sleep", "2000"], 1, None);
+    assert_eq!(
+        timed_out.execution_state,
+        ShellCommandExecutionState::TimedOut
+    );
+    let stopped = AtomicBool::new(true);
+    let cancelled = run(&["sleep", "2000"], 10, Some(&stopped));
+    assert_eq!(cancelled.result.error.as_deref(), Some("job stopped"));
+    let error = run(&["exit", "2"], 10, None);
+    assert_eq!(error.result.exit_code, Some(2));
+    let bounded = run(&["chatty", "512"], 10, None);
+    assert_eq!(
+        bounded.execution_state,
+        ShellCommandExecutionState::Completed
+    );
+    assert_eq!(bounded.result.exit_code, Some(0));
+    assert_eq!(bounded.result.stdout.unwrap().len(), 1024);
+    assert!(!bounded.stdout_truncated);
 }
 
 #[cfg(windows)]

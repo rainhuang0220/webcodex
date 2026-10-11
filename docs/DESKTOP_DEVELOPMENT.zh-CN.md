@@ -77,6 +77,39 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 修改 Windows process tree / lifecycle 时，还可能需要运行 [Testing](TESTING.md)
 列出的 ignored real-process Desktop suite。
 
+Windows 会话关闭由隐藏的原生顶层窗口接收，包括不打开 UI 的托盘启动。
+Desktop owner 在普通子进程之前收到关闭通知，接受查询时不会停止连接，只有确认
+`WM_ENDSESSION` 后才清理。所有 exposure stdin lease 一起关闭，共享 Server 保持可用，
+供已准入工作排空。并发的 Tauri/native exit 通知等待同一次清理；锁获取、进程清理和
+操作结算共用四秒 Windows 预算。不能结算的工作保留 Tunnel restart fence。
+托管 Tunnel 子进程在准备、启动及首次 control-plane poll 期间都会观察 parent stdin EOF；
+启动取消会保留 task owner，直到观察到关闭结果，因此空闲连接无需先进入 ready 状态
+即可解除 fence。持久 daemon 模式继续忽略 stdin EOF。突然终止或断电仍需解决结果
+不确定性；重启本身不授权移除 fence 或重放工作。
+
+Desktop 在生效的数据根目录中尽力保留生命周期元数据：
+`desktop-lifecycle-v1/current.jsonl` 与 `previous.jsonl`，每个文件上限 256 KiB。
+设置中的配置与数据清单列出这两个位置。记录包含 Desktop session UUID/PID、时间戳、
+带类型的退出/关闭事件，以及包含 generation、phase、PID 和 exit code 的 canonical
+owned-process snapshot；不记录 activity message、命令行、子进程 stdout/stderr 或凭据。
+
+有界后台队列使磁盘 I/O 不进入会话关闭路径；每条写入记录会同步到磁盘，轮转只保留
+两个文件。磁盘失败会禁用日志，不改变运行时所有权或恢复行为。队列溢出通过下一条
+被接受记录的 `dropped_before` 报告。突然终止可能丢失近期事件，缺少 exit 事件不能
+证明崩溃。不完整末行会保留并与后续记录隔开。这些文件仅是诊断证据，不授权重启、
+移除 Tunnel fence 或重放工作。
+
+定向原生回归只向一次性 fixture window 发送会话消息，检查四个真实 child lease
+及共享 Server 的顺序：
+
+```powershell
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib desktop_real_process_windows_session_shutdown_drains_all_profiles -- --ignored --test-threads=1
+cargo test --locked -p webcodex --lib regular_tunnel_real_process_parent_eof_during_local_probe -- --ignored --test-threads=1
+```
+
+这些测试覆盖原生通知与清理边界，不代表实际系统重启验收；真实 Windows 重启时
+仍须单独验证已安装的自动启动行为。
+
 ## 构建本地 WebCodex runtime
 
 Desktop debug build 默认会到当前仓库的 `target/dogfood` 找三个 binary。因此要从同一个

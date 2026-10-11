@@ -137,16 +137,8 @@ fn apply_text_edits_model_schema_size_is_bounded() {
     let input_schema_bytes = serde_json::to_vec(&spec.input_schema).unwrap().len();
     let description_bytes = spec.description.len();
     let total_tool_projection_bytes = serde_json::to_vec(spec).unwrap().len();
-    std::fs::write(
-        "/tmp/webcodex-edit-project-files-input-schema.json",
-        serde_json::to_vec_pretty(&spec.input_schema).unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        "/tmp/webcodex-edit-project-files-spec.json",
-        serde_json::to_vec_pretty(spec).unwrap(),
-    )
-    .unwrap();
+    // Size assertions are entirely in memory. Do not require a shared Unix
+    // /tmp directory or emit global diagnostic files from an ordinary test.
 
     eprintln!(
         "apply_text_edits surface bytes: input_schema={input_schema_bytes} description={description_bytes} total_tool_projection={total_tool_projection_bytes}"

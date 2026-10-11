@@ -26,8 +26,9 @@ use super::ToolRuntime;
 use crate::auth::AuthContext;
 use crate::runner_http::{RunnerFeature, ShellJobStartMetadata};
 use crate::runner_protocol::{
-    ShellCommandExecutionState, ShellJobOpRequest, ShellJobValidationMetadata,
-    ShellJobValidationStep,
+    validation_infrastructure_failure_code, ShellCommandExecutionState, ShellJobOpRequest,
+    ShellJobValidationMetadata, ShellJobValidationStep, VALIDATION_STEP_SPAWN_FAILED_CODE,
+    VALIDATION_STEP_WAIT_FAILED_CODE, VALIDATION_TOOL_UNAVAILABLE_CODE,
 };
 use webcodex_core::runner_job_lifecycle::RunnerJobLifecycle;
 use webcodex_core::runtime_contract::STRUCTURED_EXECUTION_SYNC_WAIT_MAX_SECS;
@@ -1153,6 +1154,20 @@ impl ToolRuntime {
         }
         let lifecycle = RunnerJobLifecycle::from_wire(job_status).ok();
         let timed_out = lifecycle.is_some_and(RunnerJobLifecycle::is_timed_out);
+        // An exit code is a finished check. Infrastructure codes are exit-less.
+        let infrastructure_code = (lifecycle == Some(RunnerJobLifecycle::Failed)
+            && exit_code.is_none())
+        .then(|| {
+            job.as_ref()
+                .and_then(|job| job.error.as_deref())
+                .and_then(validation_infrastructure_failure_code)
+        })
+        .flatten();
+        let never_started = matches!(
+            infrastructure_code,
+            Some(VALIDATION_STEP_SPAWN_FAILED_CODE | VALIDATION_TOOL_UNAVAILABLE_CODE)
+        );
+        let outcome_unknown = infrastructure_code == Some(VALIDATION_STEP_WAIT_FAILED_CODE);
         let process_passed =
             lifecycle == Some(RunnerJobLifecycle::Completed) && exit_code == Some(0);
         let mut payload = json!({
@@ -1163,7 +1178,15 @@ impl ToolRuntime {
             "executor": handoff.executor,
             "execution_source": handoff.execution_source,
             "purpose": handoff.purpose,
-            "execution_state": if timed_out { "timed_out" } else { "completed" },
+            "execution_state": if never_started {
+                "not_started"
+            } else if outcome_unknown {
+                "outcome_unknown"
+            } else if timed_out {
+                "timed_out"
+            } else {
+                "completed"
+            },
             "exit_code": exit_code,
             "duration_ms": job.as_ref().and_then(|job| job.duration_ms),
             "stdout_tail": stdout_tail,
@@ -1173,12 +1196,12 @@ impl ToolRuntime {
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
             "passed": process_passed,
-            "command_started": true,
-            "command_completed": !timed_out,
+            "command_started": !never_started,
+            "command_completed": !never_started && !outcome_unknown && !timed_out,
             "promoted_to_job": false,
             "effective_timeout_secs": handoff.effective_timeout_secs,
             "sync_wait_secs": handoff.sync_wait_secs,
-            "terminal": true,
+            "terminal": !outcome_unknown,
         });
         if let Some(projection) = crate::tool_runtime::jobs::validation_job_projection_with_policy(
             Some(adapter.tool_identity()),
@@ -1208,18 +1231,33 @@ impl ToolRuntime {
                 .await;
             ToolResult::ok(payload)
         } else {
-            let failure_kind = if timed_out {
+            let failure_kind = if never_started {
+                "executor_unavailable"
+            } else if outcome_unknown {
+                "outcome_unknown"
+            } else if timed_out {
                 "timeout"
             } else {
                 CARGO_VALIDATION_FAILURE_KIND
             };
             payload["failure_kind"] = json!(failure_kind);
-            let error = if timed_out {
-                command_timeout_message(handoff.effective_timeout_secs, &stdout_tail, &stderr_tail)
-            } else if process_passed {
-                terminal_test_count_assertion_failure_message(adapter.tool_identity(), &payload)
-            } else {
-                format!("structured validation command completed with validation failure; {VALIDATION_FAILURE_GUIDANCE}")
+            let error = match infrastructure_code {
+                Some(code) if never_started => command_rejected_message(
+                    format!("Runner reported {code} before the validation command started"),
+                    "inspect Runner availability and the validation tool, then retry the structured validation.",
+                ),
+                Some(code) if outcome_unknown => command_outcome_unknown_message(format!(
+                    "Runner reported {code} after the validation command may have started"
+                )),
+                _ if timed_out => {
+                    command_timeout_message(handoff.effective_timeout_secs, &stdout_tail, &stderr_tail)
+                }
+                _ if process_passed => {
+                    terminal_test_count_assertion_failure_message(adapter.tool_identity(), &payload)
+                }
+                _ => format!(
+                    "structured validation command completed with validation failure; {VALIDATION_FAILURE_GUIDANCE}"
+                ),
             };
             let result = ToolResult {
                 success: false,

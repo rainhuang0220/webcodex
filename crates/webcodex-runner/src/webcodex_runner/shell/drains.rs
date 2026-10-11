@@ -7,6 +7,57 @@ pub(super) struct ContinuousPipeDrain {
     pub(super) stderr_rx: mpsc::Receiver<Result<BoundedPipeTail, String>>,
     pub(super) stdout_handle: std::thread::JoinHandle<()>,
     pub(super) stderr_handle: std::thread::JoinHandle<()>,
+    pub(super) stdout_limit_reached: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct StdoutPrefixLimit {
+    pub(super) lines: usize,
+    pub(super) bytes: usize,
+}
+
+/// Native equivalent of `head -n ... | head -c ...`: retain a bounded prefix,
+/// then close the pipe. The executor still owns cancellation and tree cleanup.
+pub(super) fn read_bounded_search_prefix(
+    mut pipe: impl Read,
+    limit: StdoutPrefixLimit,
+    reached: &AtomicBool,
+) -> Result<BoundedPipeTail, String> {
+    let mut output = Vec::with_capacity(limit.bytes.min(8192));
+    let mut lines = 0;
+    let mut chunk = [0; 8192];
+    while output.len() < limit.bytes && lines < limit.lines {
+        let read = pipe
+            .read(&mut chunk)
+            .map_err(|error| format!("failed to read stdout: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        for &byte in &chunk[..read] {
+            output.push(byte);
+            lines += usize::from(byte == b'\n');
+            if output.len() == limit.bytes || lines == limit.lines {
+                reached.store(true, Ordering::SeqCst);
+                break;
+            }
+        }
+    }
+    // A byte cap can split a UTF-8 scalar. Preserve the complete prefix and
+    // replace only that incomplete suffix before Windows encoding detection;
+    // the canonical search parser discards the byte-cut record.
+    if std::str::from_utf8(&output).is_err_and(|error| error.error_len().is_none()) {
+        output = String::from_utf8_lossy(&output).into_owned().into_bytes();
+    }
+    let mut validator = super::output::IncrementalUtf8Validator::new();
+    validator.push(&output);
+    Ok(BoundedPipeTail {
+        bytes: output,
+        raw_truncated: false,
+        encoding: CapturedOutputEncoding {
+            full_stream_utf8: validator.finish(),
+            leading_bom: LeadingBom::None,
+        },
+    })
 }
 
 impl ContinuousPipeDrain {
@@ -16,7 +67,11 @@ impl ContinuousPipeDrain {
     /// not forward per-chunk data through another bounded queue, so Server/model
     /// observation cannot backpressure either stream. Each reader retains only
     /// the existing bounded tail plus UTF-8/BOM validation state.
-    pub(super) fn start(child: &mut ManagedChild, max_output_bytes: usize) -> Result<Self, String> {
+    pub(super) fn start_with_prefix(
+        child: &mut ManagedChild,
+        max_output_bytes: usize,
+        prefix: Option<StdoutPrefixLimit>,
+    ) -> Result<Self, String> {
         let stdout = child
             .child_mut()
             .stdout
@@ -30,8 +85,14 @@ impl ContinuousPipeDrain {
             }
         };
         let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+        let stdout_limit_reached = Arc::new(AtomicBool::new(false));
+        let reached = Arc::clone(&stdout_limit_reached);
         let stdout_handle = std::thread::spawn(move || {
-            let _ = stdout_tx.send(read_bounded_pipe_tail(stdout, max_output_bytes, "stdout"));
+            let output = match prefix {
+                Some(limit) => read_bounded_search_prefix(stdout, limit, &reached),
+                None => read_bounded_pipe_tail(stdout, max_output_bytes, "stdout"),
+            };
+            let _ = stdout_tx.send(output);
         });
         let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
         let stderr_handle = std::thread::spawn(move || {
@@ -42,7 +103,12 @@ impl ContinuousPipeDrain {
             stderr_rx,
             stdout_handle,
             stderr_handle,
+            stdout_limit_reached,
         })
+    }
+
+    pub(super) fn stdout_limit_reached(&self) -> bool {
+        self.stdout_limit_reached.load(Ordering::SeqCst)
     }
 
     pub(super) fn finish_until(
@@ -54,6 +120,7 @@ impl ContinuousPipeDrain {
             stderr_rx,
             stdout_handle,
             stderr_handle,
+            ..
         } = self;
         let receive = |rx: mpsc::Receiver<Result<BoundedPipeTail, String>>,
                        stream_name: &'static str|
@@ -140,7 +207,7 @@ pub(super) fn terminate_and_read_pipes(
     mut child: ManagedChild,
     max_output_bytes: usize,
 ) -> Result<(std::process::ExitStatus, BoundedPipeTail, BoundedPipeTail), String> {
-    let drains = match ContinuousPipeDrain::start(&mut child, max_output_bytes) {
+    let drains = match ContinuousPipeDrain::start_with_prefix(&mut child, max_output_bytes, None) {
         Ok(drains) => drains,
         Err(error) => {
             let cleanup = terminate_child_process_tree(&mut child).err();

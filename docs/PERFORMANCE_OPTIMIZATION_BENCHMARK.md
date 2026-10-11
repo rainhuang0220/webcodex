@@ -52,7 +52,9 @@ Planner request-count examples:
 | regex | 393.17 ms | 106.86 ms | 72.8% |
 | context ±20 | 392.13 ms | 108.81 ms | 72.3% |
 
-Directory and glob searches remained on the fallback path and showed baseline-equivalent latency.
+Directory and glob searches remained on the fallback path in this original
+benchmark and showed baseline-equivalent latency. The 2026-10-11 extension
+below changes their current routing; these historical timings stay unchanged.
 
 ## Task-level benchmark
 
@@ -170,10 +172,151 @@ also protects the flag without requiring real-process execution.
 Run native verification explicitly:
 
 ```text
-cargo test --locked -p webcodex-runner --features runner-real-process-tests runner_real_process_native_single_file_search -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p webcodex-runner --features runner-real-process-tests runner_real_process_native_search_preserves_modes_and_fallback -- --ignored --test-threads=1 --nocapture
 ```
 
 This closes the native correctness gap for the scenarios listed above. It does
 not remeasure the contributor's 20-run A/B workload, validate every timeout or
 cancellation path, or establish an end-to-end model latency improvement. The
 original timing percentages remain separately attributed measurements.
+
+## 2026-10-11: native directory/glob search and compact discovery
+
+The native Windows rg path now handles eligible project-relative directories
+and include/exclude globs, with the same mandatory exclusions as the generated
+POSIX backend. Shared core constants keep those exclusions and output budgets
+canonical. User glob precedence, literal-pattern escaping, all three result
+modes, context, marker framing and canonical parsing are preserved.
+
+The stdout reader retains the same global line prefix and 32 KiB + one-byte
+probe as the head pipeline, closes the pipe at the bound, and uses the existing
+managed process-tree cleanup. It does not collect a complete directory scan
+before truncating. Known rg errors, timeout, cancellation, uncertain cleanup,
+credential isolation, allowed cwd roots and fallback remain explicit. Native
+execution also checks allow_raw_shell and clamps the requested timeout to the
+same local policy used by internal POSIX execution.
+
+MCP compact tools/list now selects authorized Direct/extension/App descriptors
+before constructing input schemas and skips discarded output schemas. Full
+schema mode retains canonical outputs and adapter overlays. No tool admission,
+OAuth scope, App visibility, resource metadata, input bound or execution
+permission is widened. The existing canonical input cache remains unchanged;
+this is not a claim that cold initialization derives only selected enum variants.
+
+Pre-integration focused validation passed 94 tests: 27 Runner search/process/Job
+lifecycle tests (including the two explicitly enabled native rg fixtures),
+14 MCP list checks, 10 compact projection checks, 42 search/parser/model-surface/App
+checks, and one descriptor/full-contract parity test. The new 12-case auth/protocol/Apps
+matrix proves zero canonical output-schema materializations in compact mode
+and one input materialization for each selected canonical tool. Full/compact
+schema parity, discovery order and metadata are also checked. Formatting and
+whitespace checks are separate final gates; no service deployment is included.
+
+The small recursive fixture includes Unicode/spaces, CRLF, protected paths,
+user glob exclusions, context, global result limits, a long UTF-8 line, missing
+rg, cancellation and local policy refusal. Native and Git Bash/head records
+agree in matches/files_with_matches/count modes after path-separator and order
+normalization. The first comparison fixture incorrectly supplied a native-only
+path separator through MSYS and had a mismatched long-line pattern; correcting
+those fixture inputs resolved both assertions without weakening production
+limits or contracts.
+
+On this Windows host, the final single observations were:
+
+| Recursive fixture mode | Native rg | Git Bash/head |
+|---|---:|---:|
+| matches | 87 ms | 236 ms |
+| files_with_matches | 87 ms | 185 ms |
+| count | 82 ms | 235 ms |
+
+These initial smoke observations are separate from the repeated A/B measurement
+below and do not establish end-to-end ChatGPT latency.
+
+### Repeated Windows A/B measurement
+
+The measured baseline is commit `805fc51d2c61172532d4bd95d3cf9b5bc90dc181`;
+the optimized side is checkpoint `98e58fa66825484a3228c4b99d1398bf7b10f7c3`,
+before integration with newer upstream commits. Both used isolated source
+snapshots and the `dogfood` profile on Windows 11 build 26200, an Intel Core
+i7-9750H (12 logical processors), 31.8 GiB RAM, rustc 1.96.0 and ripgrep 15.2.0.
+Source fingerprints, fresh package compilation and distinct baseline/optimized
+executable hashes were checked before sampling. A detected Cargo snapshot cache
+reuse was invalidated and both variants rebuilt before any reported sample was taken.
+
+Each case/variant had 10 warmups followed by 100 measured runs. Baseline and
+optimized requests alternated AB/BA within each case. Mean is the arithmetic
+mean; P95 uses nearest rank, `sorted[ceil(0.95 * N) - 1]`. There are 800 measured
+samples in the published [raw timing CSV](benchmarks/windows-search-compact-tools-list-2026-10-11.csv).
+Only workload labels, variant, iteration, sequence and nanosecond timings are
+published; generated binaries and machine-local logs are excluded.
+
+| Case | Baseline mean | Optimized mean | Mean reduction | Baseline P95 | Optimized P95 | P95 reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Windows directory search | 393.03 ms | 93.22 ms | 76.28% | 454.38 ms | 96.12 ms | 78.85% |
+| Windows include/exclude glob search | 395.30 ms | 95.28 ms | 75.90% | 424.39 ms | 101.01 ms | 76.20% |
+| Compact tools/list, Apps disabled | 642.83 ms | 34.66 ms | 94.61% | 814.59 ms | 47.01 ms | 94.23% |
+| Compact tools/list, Apps enabled | 365.08 ms | 21.15 ms | 94.21% | 639.08 ms | 34.50 ms | 94.60% |
+
+The search fixture has 512 ordinary files (9,215,464 bytes), 200 CRLF lines per
+file, Unicode/spaces in paths, and six additional synthetic protected files.
+Directory search returns eight matches; `**/*.rs` with `**/skip/**` excluded
+returns seven. Both use `needle\.literal`, `path=src`, `limit=50`, zero context
+and a 30-second timeout. Timing includes native/fallback route selection, process
+startup, bounded collection, process-tree cleanup and Runner normalization.
+Record sorting/path normalization for equivalence checks is outside the timer.
+Every baseline search selected Git Bash/head; every optimized search selected
+native rg. Normalized records and hashes matched, including the exclusion of
+all synthetic protected files, and the fixture was unchanged after the run.
+
+Compact timing includes the production `handle_list` handler, JSON serialization
+and response DOM destruction, using a synthetic Bootstrap admin and the
+stateless-2026 protocol. HTTP transport, network, audit dispatch, model latency
+and compilation are outside the timer. Full serialized responses matched byte
+for byte in each pair: 37 tools / 83,856 bytes with Apps disabled and 59 tools /
+107,794 bytes with Apps enabled.
+
+| Compact case | Canonical input materializations, before -> after | Canonical output materializations, before -> after |
+|---|---:|---:|
+| Apps disabled | 2,274 -> 35 | 2,274 -> 0 |
+| Apps enabled | 2,298 -> 55 | 2,298 -> 0 |
+
+These counters cover canonical registry schemas; adapter-local gateway/work
+schemas are outside the counters. They explain avoided construction and cloning,
+not the response size, which is unchanged. The two Apps cases ran in separate
+cohorts; their absolute times must not be interpreted as enabling Apps making
+discovery faster. Results describe warmed local paths on this host, not cold
+initialization, arbitrary projects, production P95 or end-to-end ChatGPT speed.
+After upstream integration, focused correctness checks are rerun; these timings
+remain attributed to the original measured checkpoint rather than the newer
+integrated PR head.
+
+The integrated upstream baseline is `d87a9632`, which already includes PR #1034's
+immutable schema cache and schema-free routing checks. The percentages above
+are relative to `805fc51d`, not an incremental A/B measurement against that newer
+main. Integration preserves both upstream improvements.
+
+### Validation after upstream integration
+
+Focused checks on the integrated Rust source passed 92 tests:
+
+| Check | Passed |
+|---|---:|
+| Descriptor/full-contract parity | 1 |
+| Runner native-search checks | 6 |
+| Explicit real-process native rg/fallback fixtures | 2 |
+| MCP tools/list | 14 |
+| MCP compact projection | 10 |
+| Model surface and routing | 31 |
+| Project search command/parser | 24 |
+| Agent and Job continuation App discovery | 2 |
+| Opt-in execution-control schema | 1 |
+| Schema-free operator-extension route lookup | 1 |
+
+An initial local compile selected a stale core artifact and reported the missing
+`project_search` export even though that module existed in the current source.
+The changed Rust files' mtimes were refreshed without changing their bytes;
+Cargo then explicitly recompiled core and its dependents, and every check above
+passed. This is separate from the pre-sampling cache invalidation recorded above.
+Formatting, whitespace and repository-local Markdown links also passed. These
+checks do not include a full workspace/E2E run, deployment, Linux/macOS execution
+or a new performance measurement of the integrated head.

@@ -2,7 +2,7 @@
 
 [English](PERSONAL_SETUP.md) | [简体中文](PERSONAL_SETUP.zh-CN.md)
 
-Use this path for CLI setup, an existing Server, or a setup that needs more control than Desktop provides. For a normal Windows or macOS personal installation, the recommended first path is [WebCodex Desktop + the official OpenAI Secure Tunnel](desktop-install.md). In either case, the full WebCodex model is the same: ChatGPT connects to a regular Server, and a persistent Runner uses the real projects, Git checkout, compiler, and test tools on your machine.
+Use this path for CLI setup, an existing Server, or a setup that needs more control than Desktop provides. For a published Windows or macOS Desktop release, use the [release-specific Desktop + OpenAI Secure Tunnel guide](desktop-install.md). For the current development installer workflow, start with [Unified installation](unified-installation.md) and its acceptance limits. In either case, the full WebCodex model is the same: ChatGPT connects to a regular Server, and a persistent Runner uses the real projects, Git checkout, compiler, and test tools on your machine.
 
 If you only want to try WebCodex for a few minutes, use the [Quick Trial](QUICK_START.md) and `webcodex share` instead. `share` is a temporary, single-project launch of the ordinary Adaptive Runtime with project-scoped authentication; it ends when the command exits.
 
@@ -27,7 +27,14 @@ The Server may run on the repository machine or elsewhere. The Runner should run
 
 ## 1. Install WebCodex
 
-On Windows or macOS, prefer the dedicated [Desktop installation guide](desktop-install.md): install Desktop from the matching GitHub Release, let it manage the local Server + Runner, and connect ChatGPT through the official OpenAI Secure Tunnel. The command-line setup below is the alternative for Linux, existing Servers, advanced configuration, and troubleshooting.
+Choose the documentation for the artifact you will actually install:
+
+| Source | Platforms / artifacts | Entry and limits |
+| --- | --- | --- |
+| Published v0.4.6 | Windows x64/arm64 setup `.exe`; macOS Intel/Apple Silicon `.dmg`; CLI/Server/Runner `.tar.gz` for Linux/macOS/Windows x64/arm64 | [Release assets](https://github.com/yyjeqhc/webcodex/releases/tag/v0.4.6) and [Desktop installation](desktop-install.md); use the release's documentation for version-specific behavior. |
+| Current v0.5 development source | Unified Windows NSIS, macOS `.pkg`, Linux `.deb` targets; Linux Runtime package workflow | [Unified installation](unified-installation.md), [Runtime installation](runtime-installation.md), and [source preview](DESKTOP_DEVELOPMENT.md#linux-source-preview-against-an-existing-server); native installer acceptance remains pending in [Deployment validation](unified-deployment-validation.md). This does not announce published v0.5 installers. |
+
+For a published Windows or macOS Desktop artifact, follow the dedicated [Desktop installation guide](desktop-install.md): install Desktop from the matching GitHub Release, let it manage the local Server + Runner, and connect ChatGPT through the official OpenAI Secure Tunnel. The command-line setup below is the alternative for Linux, existing Servers, advanced configuration, and troubleshooting.
 
 For the CLI path, install Node.js 18+ and Git, then:
 
@@ -183,7 +190,8 @@ With the full setup, the AI should be able to explore and edit projects, use Git
 | Goal | Recommended entry | What it is |
 | --- | --- | --- |
 | Try one repository for a few minutes | `webcodex share` | One command, temporary, single-project, ordinary Adaptive Runtime, ends on exit |
-| Everyday use on Windows/macOS | [Desktop + official OpenAI Secure Tunnel](desktop-install.md) | Local Server + Runner, multiple projects, simplest recommended personal path |
+| Published Desktop release on Windows/macOS | [Desktop + official OpenAI Secure Tunnel](desktop-install.md) | Release-specific local Server + Runner and multiple projects |
+| Current development installer/source preview | [Unified installation](unified-installation.md) | Development workflow; check artifact availability and native acceptance before installation |
 | CLI, Linux, or an existing Server | regular Server + Runner (this guide) | Durable identity, multiple projects, full development tools, independent network choice |
 | Operate a team/production deployment | [Deployment](DEPLOYMENT.md) | systemd, Docker, OAuth, multi-user and operator reference |
 

@@ -8,6 +8,7 @@ pub(crate) mod invocation;
 pub(crate) mod job_convergence;
 #[cfg(test)]
 mod normalization_tests;
+pub(crate) mod output_transfer;
 
 use super::edit_tool_telemetry::{edit_tool_surface, EditToolSurface};
 use super::tool_definition::model_visible_tool_definitions;
@@ -132,6 +133,8 @@ pub(crate) struct ModelErgonomicsRecord {
     pub(crate) success: bool,
     pub(crate) duration_ms: u64,
     pub(crate) serialized_result_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_transfer: Option<output_transfer::OutputTransferFacts>,
     pub(crate) error_kind: Option<String>,
     pub(crate) failure_kind: Option<String>,
     pub(crate) recovery_kind: Option<String>,
@@ -452,6 +455,9 @@ impl ModelErgonomicsCompletion {
             duration_ms: self.duration_ms,
             serialized_result_bytes: serialized_result_bytes
                 .map(|bytes| bytes.min(u64::MAX as usize) as u64),
+            output_transfer: success
+                .then(|| output_transfer::from_model_result(self.tool_name, output))
+                .flatten(),
             error_kind,
             failure_kind,
             recovery_kind,
