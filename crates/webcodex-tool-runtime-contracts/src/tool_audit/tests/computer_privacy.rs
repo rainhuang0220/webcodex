@@ -1880,10 +1880,10 @@ fn coding_agent_audit_is_body_free_for_requests_and_observations() {
         "has_more": false,
         "history_lost": false,
         "first_retained_sequence": 1,
-        "terminal": null,
-        "recovery_kind": "reobserve"
+        "terminal": null
     });
     let result_summary = session_log_result_for_tool("observe_coding_agent", &output);
+    assert!(result_summary["recovery_kind"].is_null());
     let result_serialized = serde_json::to_string(&result_summary).unwrap();
     assert_eq!(result_summary["event_count"], 3);
     assert_eq!(

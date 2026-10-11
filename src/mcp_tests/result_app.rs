@@ -94,11 +94,10 @@ fn result_tool_app_metadata_is_capability_scoped_compact_safe_and_merge_safe() {
             tool(&enabled, "present_goal_plan")["_meta"]["ui"]["resourceUri"],
             MCP_GOAL_PLAN_UI_RESOURCE_URI
         );
-        assert!(!enabled["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tool| tool["name"] == "present_agent_continuation"));
+        assert_eq!(
+            tool(&enabled, "present_agent_continuation")["_meta"]["ui"]["resourceUri"],
+            MCP_AGENT_CONTINUATION_UI_RESOURCE_URI
+        );
         assert_eq!(
             tool(&enabled, "present_work_result")["_meta"]["ui"]["resourceUri"],
             MCP_WORK_RESULT_UI_RESOURCE_URI
@@ -1789,6 +1788,118 @@ async fn register_job_runner(runtime: &ToolRuntime, auth: &crate::auth::AuthCont
         }],
     )
     .await;
+}
+
+#[tokio::test]
+async fn direct_job_continuation_presentation_reauthorizes_an_owned_gateway_wait() {
+    use crate::job_terminal_attention::JobTerminalContinuationController;
+    let temp = tempfile::tempdir().unwrap();
+    let db = Arc::new(crate::Database::open(&temp.path().join("direct-job-app.db")).unwrap());
+    let controller = JobTerminalContinuationController::new(db.clone());
+    let registry = Arc::new(
+        crate::job_receipts::production_registry_with_terminal_attention(
+            db.clone(),
+            controller.clone(),
+        )
+        .await,
+    );
+    let runtime = ToolRuntime::new(
+        registry,
+        Arc::new(crate::tool_runtime::RuntimeInfo::default()),
+    )
+    .with_job_terminal_attention(db, controller);
+    let owner = crate::auth::shared_key_context(&"8".repeat(64));
+    register_job_runner(&runtime, &owner).await;
+    let started = runtime
+        .dispatch_with_auth(
+            ToolCall::RunJob {
+                project: "agent:result-app-runner:demo".to_string(),
+                command: "echo continuation".to_string(),
+                session_id: None,
+                timeout_secs: Some(60),
+                cwd: None,
+                purpose: None,
+                shell: None,
+            },
+            Some(&owner),
+        )
+        .await;
+    assert!(started.success, "{started:?}");
+    let job_id = started.output["job_id"].as_str().unwrap();
+    let armed = handle_with_app_policy(
+        &runtime,
+        rpc(
+            "tools/call",
+            Some(json!(6201)),
+            mcp_2026_ui_params(adaptive_runtime_gateway_params(
+                "wait_for_job_terminal",
+                json!({"job_id": job_id, "idempotency_key": "direct-job-presentation"}),
+            )),
+        ),
+        Some(&owner),
+        true,
+    )
+    .await;
+    let McpOutcome::Ok(armed) = armed else {
+        panic!("expected owned Gateway wait")
+    };
+    let armed = &armed["result"]["structuredContent"];
+    assert_eq!(armed["success"], true);
+    assert_eq!(armed["output"]["state"], "waiting");
+    let suggestion = &armed["output"]["suggested_call"];
+    assert_eq!(suggestion["tool"], "present_job_terminal_continuation");
+    let wait_id = &armed["output"]["wait_id"];
+    assert_eq!(suggestion["arguments"], json!({"wait_id": wait_id}));
+    let presented = handle_with_app_policy(
+        &runtime,
+        rpc(
+            "tools/call",
+            Some(json!(6202)),
+            mcp_2026_ui_params(
+                json!({"name": suggestion["tool"], "arguments": suggestion["arguments"]}),
+            ),
+        ),
+        Some(&owner),
+        true,
+    )
+    .await;
+    let McpOutcome::Ok(presented) = presented else {
+        panic!("expected owned Direct Job presentation")
+    };
+    let presented = &presented["result"]["structuredContent"];
+    assert_eq!(presented["success"], true);
+    assert_eq!(
+        presented["output"]["job_terminal_continuation"]["wait_id"],
+        *wait_id
+    );
+    assert_eq!(
+        presented["output"]["job_terminal_continuation"]["job_id"],
+        job_id
+    );
+    assert!(!presented.to_string().contains("consume_token"));
+
+    let foreign = crate::auth::shared_key_context(&"9".repeat(64));
+    let denied = handle_with_app_policy(
+        &runtime,
+        rpc(
+            "tools/call",
+            Some(json!(6203)),
+            mcp_2026_ui_params(
+                json!({"name": suggestion["tool"], "arguments": suggestion["arguments"]}),
+            ),
+        ),
+        Some(&foreign),
+        true,
+    )
+    .await;
+    let McpOutcome::Ok(denied) = denied else {
+        panic!("expected existence-hiding denial")
+    };
+    assert_eq!(denied["result"]["structuredContent"]["success"], false);
+    assert_eq!(
+        denied["result"]["structuredContent"]["output"]["error_kind"],
+        "job_terminal_wait_not_found"
+    );
 }
 
 async fn set_job_state(

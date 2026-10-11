@@ -1711,6 +1711,19 @@ pub fn write_embedded_tunnel_health(
     )
 }
 
+struct TunnelHealthFileLock {
+    file: std::fs::File,
+}
+
+impl Drop for TunnelHealthFileLock {
+    fn drop(&mut self) {
+        // A concurrent spawn can inherit the open-file description until exec.
+        // Closing only our handle can therefore leave a completed read/write
+        // holding its lock. Release it on every return path before closing.
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
 fn write_tunnel_health_inner(
     path: &std::path::Path,
     profile_revision: Option<u64>,
@@ -1740,8 +1753,9 @@ fn write_tunnel_health_inner(
         }
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
-    let mut file = options.open(path).map_err(|_| SetupDiagnostic::io())?;
+    let file = options.open(path).map_err(|_| SetupDiagnostic::io())?;
     fs2::FileExt::try_lock_exclusive(&file).map_err(|_| SetupDiagnostic::io())?;
+    let mut locked = TunnelHealthFileLock { file };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| SetupDiagnostic::io())?
@@ -1756,9 +1770,11 @@ fn write_tunnel_health_inner(
         "state": state,
         "diagnostic": diagnostic_code.map(safe_tunnel_diagnostic)
     });
-    file.set_len(0)
-        .and_then(|_| file.write_all(value.to_string().as_bytes()))
-        .and_then(|_| file.sync_all())
+    locked
+        .file
+        .set_len(0)
+        .and_then(|_| locked.file.write_all(value.to_string().as_bytes()))
+        .and_then(|_| locked.file.sync_all())
         .map_err(|_| SetupDiagnostic::io())
 }
 
@@ -1828,8 +1844,10 @@ pub(crate) fn read_tunnel_health(
     }
     let file = options.open(path).map_err(|_| SetupDiagnostic::io())?;
     fs2::FileExt::try_lock_shared(&file).map_err(|_| SetupDiagnostic::io())?;
+    let mut locked = TunnelHealthFileLock { file };
     let mut bytes = Vec::new();
-    file.take(4097)
+    Read::by_ref(&mut locked.file)
+        .take(4097)
         .read_to_end(&mut bytes)
         .map_err(|_| SetupDiagnostic::io())?;
     let value: serde_json::Value =
@@ -1872,6 +1890,9 @@ pub(crate) fn read_tunnel_health(
             .and_then(serde_json::Value::as_u64),
     })
 }
+
+#[cfg(all(test, unix))]
+mod health_tests;
 
 #[cfg(test)]
 mod tests {

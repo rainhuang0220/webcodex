@@ -7,6 +7,21 @@
 
 This note records durable findings from the September 11-12, 2026 MCP App presentation and continuation investigation. The experiments ran in a temporary `mcp-stream-probe` deployment rather than the production WebCodex runtime. They establish Host behavior and design constraints; they do **not** make the temporary probe state machine a production contract.
 
+## October 11 restoration and acceptance boundary
+
+Issues #1018 and #1013 report missing continuation presentation entries.
+[PR #1028](https://github.com/yyjeqhc/webcodex/pull/1028) restored both Agent and
+Job presentation tools as dedicated Direct tools, retaining the existing App
+protocol, generation fences and uncertainty
+handling. Current resources are Agent v20 and Job v2. After presenting, output a
+normal assistant final response to complete the original turn; the tool result
+and card alone are insufficient. That source change does not establish current
+ChatGPT automatic-resume support. The [acceptance procedure](../implementation/mcp-app-auto-resume-restoration.md)
+requires fresh-turn evidence for both card families, exact Agent Wake consume,
+and exact Job wait delivery followed by Job observation, including foreground
+and background delays. Keep the default Host policy `unknown` until
+the deployment's behavior has actually been verified.
+
 ## Why this investigation existed
 
 WebCodex already exposes MCP App result cards, but a durable background agent needs stronger answers than "the card rendered":
@@ -196,9 +211,9 @@ agent_continuation_wake_finish    # dispatch_accepted | delivery_unknown
 later model turn exact-consumes Wake
 ```
 
-The only card-creating entry is the explicit read `present_agent_continuation(agent_id, endpoint_id, expected_controller_generation)`, bound to the current `ui://webcodex/agent-continuation/v16` resource. Bind/recover/state/acquire/prepare/finish/unbind are globally ModelHidden and are projected only as App-visible tools on eligible Stateless MCP 2026 operator surfaces. They do not bind the resource again, so polling/coordination does not create a stream of custom cards. Ordinary communication and coding tools keep native Host presentation.
+The only card-creating entry is the explicit read `present_agent_continuation(agent_id, endpoint_id, expected_controller_generation)`, bound to the current `ui://webcodex/agent-continuation/v20` resource. Bind/recover/state/acquire/prepare/finish/unbind are globally ModelHidden and are projected only as App-visible tools on eligible Stateless MCP 2026 operator surfaces. They do not bind the resource again, so polling/coordination does not create a stream of custom cards. Ordinary communication and coding tools keep native Host presentation.
 
-The setup invariant is `create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation -> yield/end turn`. The presentation response precedes any guaranteed View bind, and the presenting turn has no authoritative fully-mounted signal; continuing long coordinator work after presentation can therefore outlive the bounded Endpoint lease before a carrier exists. Verify the later exact-generation carrier with `list_agent_identities.production_auto_resume_available`; do not treat presentation success or ClientWindow activity as readiness/model-liveness proof.
+The setup invariant is `create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation -> normal final assistant response`; the card/tool result alone does not finish the presenting turn. The presentation response precedes any guaranteed View bind, and the presenting turn has no authoritative fully-mounted signal; continuing long coordinator work after presentation can therefore outlive the bounded Endpoint lease before a carrier exists. Verify the later exact-generation carrier with `list_agent_identities.production_auto_resume_available`; do not treat presentation success or ClientWindow activity as readiness/model-liveness proof.
 
 The View binding is process-local fencing, not durable authority. Every App-only operation re-authorizes the normal communication principal and exact Agent/Endpoint/controller generation. `binding_id` identifies only the current iframe/process instance. For MCP Apps, the Store retains both the v11 SHA-256 fingerprint of the exact current binding fence and, when the Host supplied valid request-scoped identity, the already-domain-separated SHA-256 `ClientWindow` key. Raw `_meta["openai/session"]` is never persisted. Server takeover clears process-local carriers and durable `wake_capable` but preserves both bounded restart-recovery values. The exact old binding fingerprint remains the fallback when no valid ClientWindow exists. With a canonical ClientWindow, the same authenticated principal + exact Endpoint/generation + same Window may restore or replace a lost iframe fence after restart; refresh unbind clears the iframe fingerprint but preserves that same-Window continuity while the Endpoint remains current. Natural lease expiry clears wake capability and the binding fingerprint; v15 preserves only the hashed Window key as a bounded input to the dedicated expired-Endpoint replacement operation and its exact one-hop replay chain, while ordinary bind/state still reject the expired Endpoint. Explicit detach, ordinary Endpoint replacement, or transition to a push carrier clears the continuity value. Push adapters still require a fresh current-process attachment and never inherit Window recovery. On replacement/loss, existing Store reconciliation handles the durable state: pre-fence claim -> revoked Attempt + pending Wake; post-fence prepared/delivered -> `delivery_unknown`.
 
@@ -232,8 +247,20 @@ Visible status distinguishes script activity, Host initialization, exact identit
 selection, and live binding/polling, with separate initialization, binding, and
 identity errors. Diagnostics do not display binding ids, claim fences, or consume
 tokens. `tools/list` and `resources/list` advertise only the canonical
-`ui://webcodex/agent-continuation/v18` and `ui://webcodex/goal-plan/v7` resources. Goal Plan now uses only its current resource (wire version 3), with no old Goal-resource aliases. The G5 projection keeps production carrier readiness, exact Goal-stall Wake lifecycle, Host delivery outcome, and exact-consume fresh-turn proof as separate bounded facts; it exposes no Wake/Attempt/Endpoint identifiers or continuation proofs.
-Agent continuation v1-v15 are hidden read aliases serving the same current template. Reading an alias does not revive an expired Endpoint or bypass exact generation/authorization fencing; the same current template must still complete explicit Server-authorized one-hop replacement transitions. The v11 fingerprint-proven restart fallback, v12 strict restart projection, v13 canonical Host-window refresh fence, v14 expired-Endpoint replacement, and v15 bounded successor replay remain intact; v16 changes only visibility eligibility for automatic dispatch.
+`ui://webcodex/agent-continuation/v20` and `ui://webcodex/goal-plan/v7` resources. Goal Plan now uses only its current resource (wire version 3), with no old Goal-resource aliases. The G5 projection keeps production carrier readiness, exact Goal-stall Wake lifecycle, Host delivery outcome, and exact-consume fresh-turn proof as separate bounded facts; it exposes no Wake/Attempt/Endpoint identifiers or continuation proofs.
+
+The v20 Agent View also accepts a valid `agent_continuation_ref` presentation
+input without treating its absent tuple as an invalid identity. That opaque ref
+does not select an Agent locally: the View waits for the Server's validated
+initial ToolResult to supply the exact Agent/Endpoint/generation. A later matching
+input or initial result cannot duplicate binding. Invalid refs, mixed selectors
+and conflicting resolved identities still fail closed. The View also fences the
+original presentation ref; a later different ref is a terminal conflict.
+A tool-input notification with omitted `arguments` leaves the selected identity unchanged and waits for
+a valid selector; the [MCP Apps notification contract](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiToolInputNotification.html)
+permits this omission. It cannot select an Agent or trigger binding. The App URI and
+`appInfo.version` advance together; no wire protocol or permission changes.
+Earlier experiments kept Agent continuation v1-v15 as hidden read aliases serving the then-current template; the current v0.5 registry rejects retired URIs. Those alias reads did not revive an expired Endpoint or bypass exact generation/authorization fencing; the template still had to complete explicit Server-authorized one-hop replacement transitions. The v11 fingerprint-proven restart fallback, v12 strict restart projection, v13 canonical Host-window refresh fence, v14 expired-Endpoint replacement, and v15 bounded successor replay remain intact; v16 changed only visibility eligibility for automatic dispatch.
 
 ## Goal-correlated terminal attention carrier
 

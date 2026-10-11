@@ -84,8 +84,8 @@ remains the fallback for details and recovery.
 
 For MCP Apps, the canonical parser-ready `suggested_call` is projected only while
 the exact wait is still `waiting/not_ready`. Use it only when no independent work remains:
-present the continuation card as the final meaningful action, then yield/end the
-current model turn promptly. If registration already returns terminal truth, handle
+present the continuation card, then produce a normal final assistant response and
+let the current model turn finalize promptly; the card/tool result alone does not finish it. If registration already returns terminal truth, handle
 that result in the current turn instead of arming a redundant follow-up.
 
 The current MCP App Host contract does not expose an authoritative "this model
