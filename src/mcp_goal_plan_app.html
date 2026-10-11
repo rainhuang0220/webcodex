@@ -78,6 +78,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   let pollTimer = null;
   let pollInFlight = false;
   let lastPlan = null;
+  let lastSuccessfulObservationAt = null;
   let tornDown = false;
   const pending = new Map();
   const utf8Encoder = new TextEncoder();
@@ -398,8 +399,24 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
     pollTimer = null;
   }
 
+  // The next hidden sync has to start early enough for its call timeout to
+  // finish inside the observation lease. Time since the last accepted sync
+  // counts against that budget.
+  function hiddenPollDelay() {
+    if (lastSuccessfulObservationAt === null) return HIDDEN_POLL_MS;
+    const elapsed = Date.now() - lastSuccessfulObservationAt;
+    const remaining = OBSERVATION_LEASE_MS - CALL_TIMEOUT_MS - elapsed;
+    if (remaining <= 0) return 0;
+    return Math.min(HIDDEN_POLL_MS, remaining);
+  }
+
   function nextPollDelay(plan) {
-    if (document.hidden) return HIDDEN_POLL_MS;
+    if (document.hidden) {
+      const delay = hiddenPollDelay();
+      // Zero means this attempt is already outside the lease budget.
+      // Back off to the normal hidden cadence instead of retrying immediately.
+      return delay > 0 ? delay : HIDDEN_POLL_MS;
+    }
     if (!plan) return VISIBLE_NORMAL_POLL_MS;
     const continuity = plan.continuity;
     if (["wake_queued", "dispatching", "host_accepted", "host_unknown"].includes(continuity.state)) {
@@ -437,6 +454,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
       lastRevision = plan.revision;
       lastLifecycle = plan.lifecycle;
       lastPlan = plan;
+      lastSuccessfulObservationAt = Date.now();
       render(plan);
     } catch (_) {
       if (!tornDown) el("status").textContent = "State refresh pending";
@@ -512,7 +530,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 
   addEventListener("visibilitychange", () => {
     if (tornDown || isTerminal()) return;
-    if (document.hidden) schedulePoll(HIDDEN_POLL_MS);
+    if (document.hidden) schedulePoll(hiddenPollDelay());
     else {
       stopPolling();
       if (!pollInFlight) void poll();

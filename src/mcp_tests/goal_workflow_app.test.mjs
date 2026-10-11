@@ -101,6 +101,50 @@ test("hidden cards use 60s polling, stay inside the 75s observation lease, and r
   assert.equal(view.calls("sync_goal_plan").length, 3);
 });
 
+test("an accepted sync restarts the hidden lease budget", async () => {
+  const view = await ready();
+  view.advanceTime(20_000);
+  await view.fireTimers(12_000);
+  await view.reply(view.calls("sync_goal_plan")[1], toolResult({ goal_plan: plan }));
+  await view.visibility(true);
+  assert.equal(view.timers.size, 1);
+  assert.equal([...view.timers.values()][0].delay, 60_000);
+});
+
+test("hiding after elapsed time keeps the next sync inside the observation lease", async () => {
+  const view = await ready();
+  view.advanceTime(20_000);
+  await view.visibility(true);
+  assert.equal(view.timers.size, 1);
+  const delay = [...view.timers.values()][0].delay;
+  assert.equal(delay, 45_000);
+  await view.fireTimers(45_000);
+  assert.equal(view.calls("sync_goal_plan").length, 2);
+});
+
+test("a failed hidden sync keeps the lease budget measured from the last success", async () => {
+  const view = await ready();
+  await view.fireTimers(12_000);
+  view.advanceTime(20_000);
+  await view.visibility(true);
+  await view.reject(view.calls("sync_goal_plan")[1]);
+  assert.equal(view.timers.size, 1);
+  assert.equal([...view.timers.values()][0].delay, 33_000);
+});
+
+test("a hidden card past the lease budget syncs once immediately and then waits 60s", async () => {
+  const view = await ready();
+  view.advanceTime(65_000);
+  await view.visibility(true);
+  assert.equal([...view.timers.values()][0].delay, 0);
+  await view.fireTimers(0);
+  assert.equal(view.calls("sync_goal_plan").length, 2);
+  await view.reject(view.calls("sync_goal_plan")[1]);
+  assert.equal(view.timers.size, 1);
+  assert.equal([...view.timers.values()][0].delay, 60_000);
+  assert.equal(view.calls("sync_goal_plan").length, 2);
+});
+
 test("terminal Goal stops polling and late visibility changes cannot restart it", async () => {
   const view = await ready();
   await view.fireTimers(12000);
