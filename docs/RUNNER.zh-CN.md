@@ -295,6 +295,7 @@ Runner 可以直接托管供 WebCodex 内建 MCP gateway 使用的 persistent st
 ```toml
 [mcp]
 request_timeout_secs = 30
+max_tool_description_bytes = 65536 # 默认 64 KiB
 
 [[mcp.providers]]
 id = "github"
@@ -305,6 +306,8 @@ cwd = "/absolute/provider/workdir"
 env_from_env = { GITHUB_TOKEN = "GITHUB_TOKEN", PATH = "PATH", HOME = "HOME" }
 timeout_secs = 30
 ```
+
+`max_tool_description_bytes` 是 Runner 侧可由用户配置的单工具 `description` 长度上限（默认 65,536 字节；有效范围 4,096–262,144 字节），同时用于 `tools/list` 与 `tools/call` 前的 schema 重新检查。Server 仍独立执行固定 256 KiB 单描述协议硬上限、完整 `tools/list` 1 MiB 消息上限，以及 Schema/工具数量限制。可在 Runner `[mcp]` 下设置，并通过 generation-fenced 配置重新加载生效，无需重启未变化的 provider；不会截断原始描述，也不会扩大模型展示预算。
 
 `executable` 与可选 `cwd` 都是 Runner host-local operator 配置并且必须为绝对路径；非法路径会 fail closed。`[mcp]` 现在参与正常的 generation-fenced Runner config reload transaction：配置未变化的 provider 保留 exact provider identity 和现有 connection；配置发生变化的 provider 获得新的 provider identity；新增/删除 provider 会在不重启 Runner 的情况下更新 routing。旧的 exact provider identity 会 fail closed，绝不会被静默 retarget。
 

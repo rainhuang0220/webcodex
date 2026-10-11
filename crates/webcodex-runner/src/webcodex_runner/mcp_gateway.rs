@@ -18,11 +18,11 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock, TryLockError};
 use std::time::{Duration, Instant};
 use webcodex_core::mcp_gateway::{
-    validate_json_value, validate_request, validate_tool_result, validate_tools, McpGatewayContent,
-    McpGatewayDispatchState, McpGatewayProvider, McpGatewayProviderState, McpGatewayRequest,
-    McpGatewayResponse, McpGatewayResponsePayload, McpGatewayTool, McpGatewayToolResult,
-    MCP_GATEWAY_MAX_MESSAGE_BYTES, MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES,
-    MCP_GATEWAY_MAX_RESULT_BYTES,
+    validate_json_value, validate_request, validate_tool_result,
+    validate_tools_with_description_limit, McpGatewayContent, McpGatewayDispatchState,
+    McpGatewayProvider, McpGatewayProviderState, McpGatewayRequest, McpGatewayResponse,
+    McpGatewayResponsePayload, McpGatewayTool, McpGatewayToolResult, MCP_GATEWAY_MAX_MESSAGE_BYTES,
+    MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES, MCP_GATEWAY_MAX_RESULT_BYTES,
 };
 use webcodex_process::ManagedChild;
 
@@ -40,6 +40,7 @@ pub(crate) struct McpGatewayManager {
 struct McpGatewayState {
     providers: BTreeMap<String, Arc<ProviderEntry>>,
     request_timeout: Duration,
+    max_tool_description_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +167,7 @@ impl McpGatewayManager {
             state: RwLock::new(McpGatewayState {
                 providers,
                 request_timeout: Duration::from_secs(config.request_timeout_secs.clamp(1, 120)),
+                max_tool_description_bytes: config.max_tool_description_bytes,
             }),
             stopping: AtomicBool::new(false),
         }
@@ -242,6 +244,7 @@ impl McpGatewayManager {
             }
             state.providers = next;
             state.request_timeout = Duration::from_secs(config.request_timeout_secs.clamp(1, 120));
+            state.max_tool_description_bytes = config.max_tool_description_bytes;
             summary = McpGatewayReloadSummary {
                 preserved,
                 replaced,
@@ -275,7 +278,8 @@ impl McpGatewayManager {
                 provider_id,
                 provider_instance_id,
             } => {
-                let Some((provider, _)) = self.exact_provider(&provider_id, &provider_instance_id)
+                let Some((provider, _, _)) =
+                    self.exact_provider(&provider_id, &provider_instance_id)
                 else {
                     return stale_provider();
                 };
@@ -287,7 +291,7 @@ impl McpGatewayManager {
                 provider_id,
                 provider_instance_id,
             } => {
-                let Some((provider, timeout)) =
+                let Some((provider, timeout, max_description_bytes)) =
                     self.exact_provider(&provider_id, &provider_instance_id)
                 else {
                     return stale_provider();
@@ -295,7 +299,7 @@ impl McpGatewayManager {
                 match provider.with_connection(
                     timeout,
                     || self.check_provider_admission(&provider_id, &provider_instance_id),
-                    |connection, timeout| connection.tools_list(timeout),
+                    |connection, timeout| connection.tools_list(timeout, max_description_bytes),
                 ) {
                     Ok(tools) => {
                         McpGatewayResponse::success(McpGatewayResponsePayload::Tools { tools })
@@ -310,7 +314,7 @@ impl McpGatewayManager {
                 arguments,
                 expected_schema,
             } => {
-                let Some((provider, timeout)) =
+                let Some((provider, timeout, max_description_bytes)) =
                     self.exact_provider(&provider_id, &provider_instance_id)
                 else {
                     return stale_provider();
@@ -321,7 +325,7 @@ impl McpGatewayManager {
                     |connection, timeout| {
                         let started = Instant::now();
                         let tools = connection
-                            .tools_list(timeout)
+                            .tools_list(timeout, max_description_bytes)
                             .map_err(ProviderFailure::preflight)?;
                         let Some(current) = tools.iter().find(|tool| tool.name == name) else {
                             return Err(ProviderFailure::not_started("provider_tool_missing"));
@@ -381,7 +385,7 @@ impl McpGatewayManager {
         &self,
         provider_id: &str,
         provider_instance_id: &str,
-    ) -> Option<(Arc<ProviderEntry>, Duration)> {
+    ) -> Option<(Arc<ProviderEntry>, Duration, usize)> {
         let state = self
             .state
             .read()
@@ -393,6 +397,7 @@ impl McpGatewayManager {
         Some((
             Arc::clone(provider),
             provider.request_timeout(state.request_timeout),
+            state.max_tool_description_bytes,
         ))
     }
 
@@ -745,7 +750,11 @@ impl ProviderConnection {
         Ok(connection)
     }
 
-    fn tools_list(&mut self, timeout: Duration) -> Result<Vec<McpGatewayTool>, ProviderFailure> {
+    fn tools_list(
+        &mut self,
+        timeout: Duration,
+        max_description_bytes: usize,
+    ) -> Result<Vec<McpGatewayTool>, ProviderFailure> {
         let result = self.request("tools/list", json!({}), timeout)?;
         validate_json_value(
             &result,
@@ -812,7 +821,7 @@ impl ProviderConnection {
                 meta,
             });
         }
-        validate_tools(&tools).map_err(|error| {
+        validate_tools_with_description_limit(&tools, max_description_bytes).map_err(|error| {
             ProviderFailure::completed("invalid_provider_tools").with_detail(error)
         })?;
         Ok(tools)

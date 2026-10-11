@@ -159,8 +159,10 @@ fn main() -> io::Result<()> {
                     continue;
                 }
                 let description = if scenario == "bad_tools" {
-                    // One byte past MCP_GATEWAY_MAX_DESCRIPTION_BYTES (64 KiB).
-                    "x".repeat(64 * 1024 + 1)
+                    // One byte past the 256 KiB MCP wire hard limit.
+                    "x".repeat(256 * 1024 + 1)
+                } else if scenario == "larger_description" {
+                    "x".repeat(96 * 1024)
                 } else if scenario == "long_description" {
                     "x".repeat(20_000)
                 } else {

@@ -353,6 +353,7 @@ The Runner can directly host persistent stdio MCP providers for WebCodex's built
 ```toml
 [mcp]
 request_timeout_secs = 30
+max_tool_description_bytes = 65536 # Default: 64 KiB
 
 [[mcp.providers]]
 id = "github"
@@ -363,6 +364,8 @@ cwd = "/absolute/provider/workdir"
 env_from_env = { GITHUB_TOKEN = "GITHUB_TOKEN", PATH = "PATH", HOME = "HOME" }
 timeout_secs = 30
 ```
+
+`max_tool_description_bytes` is a Runner-owned, operator-configurable per-tool `description` admission limit (default 65,536 bytes; accepted range 4,096–262,144 bytes). It applies to both `tools/list` and the schema preflight before `tools/call`. The Server still enforces the fixed 256 KiB per-description protocol hard cap, 1 MiB whole `tools/list` message cap, and the existing schema/tool-count bounds. Set this in the Runner's `[mcp]` section; a generation-fenced Runner config reload applies it without restarting unchanged providers. This does not truncate third-party descriptions or expand model-facing budgets.
 
 `executable` and optional `cwd` must be absolute host-local operator configuration. Invalid paths fail closed. `[mcp]` participates in the normal generation-fenced Runner config reload transaction: unchanged providers keep their exact provider identity and live connection, changed providers receive a fresh provider identity, and added/removed providers update routing without restarting the Runner. Old exact provider identities fail closed and are never retargeted.
 

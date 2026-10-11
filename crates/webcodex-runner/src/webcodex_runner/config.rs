@@ -181,7 +181,9 @@ impl Default for AcpConfig {
     }
 }
 
-use webcodex_core::mcp_gateway::MCP_GATEWAY_MAX_ENV_MAPPINGS;
+use webcodex_core::mcp_gateway::{
+    MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES, MCP_GATEWAY_MAX_ENV_MAPPINGS,
+};
 const MCP_GATEWAY_MAX_ENV_NAME_BYTES: usize = 256;
 pub(crate) const MCP_GATEWAY_MAX_CWD_BYTES: usize = 4_096;
 
@@ -189,6 +191,10 @@ pub(crate) const MCP_GATEWAY_MAX_CWD_BYTES: usize = 4_096;
 pub(crate) struct McpGatewayConfig {
     #[serde(default = "default_mcp_gateway_request_timeout_secs")]
     pub(crate) request_timeout_secs: u64,
+    /// Runner-owned soft limit for one local MCP tool description, in bytes.
+    /// The shared wire hard cap remains enforced independently by the Server.
+    #[serde(default = "default_mcp_gateway_max_tool_description_bytes")]
+    pub(crate) max_tool_description_bytes: usize,
     #[serde(default)]
     pub(crate) providers: Vec<McpGatewayProviderConfig>,
 }
@@ -219,10 +225,15 @@ fn default_mcp_gateway_request_timeout_secs() -> u64 {
     30
 }
 
+fn default_mcp_gateway_max_tool_description_bytes() -> usize {
+    MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES
+}
+
 impl Default for McpGatewayConfig {
     fn default() -> Self {
         Self {
             request_timeout_secs: default_mcp_gateway_request_timeout_secs(),
+            max_tool_description_bytes: default_mcp_gateway_max_tool_description_bytes(),
             providers: Vec::new(),
         }
     }
@@ -1935,11 +1946,20 @@ fn validate_mcp_gateway_env_name(value: &str) -> Result<(), ()> {
 fn validate_mcp_gateway_config(config: &McpGatewayConfig) -> Result<(), String> {
     use std::collections::HashSet;
     use webcodex_core::mcp_gateway::{
-        validate_provider_id, validate_provider_name, MCP_GATEWAY_MAX_PROVIDERS,
+        validate_provider_id, validate_provider_name, MCP_GATEWAY_MAX_DESCRIPTION_BYTES,
+        MCP_GATEWAY_MAX_PROVIDERS,
     };
 
     if !(1..=120).contains(&config.request_timeout_secs) {
         return Err("mcp.request_timeout_secs must be between 1 and 120".to_string());
+    }
+    if !(4 * 1024..=MCP_GATEWAY_MAX_DESCRIPTION_BYTES).contains(&config.max_tool_description_bytes)
+    {
+        return Err(format!(
+            "mcp.max_tool_description_bytes must be between {} and {}",
+            4 * 1024,
+            MCP_GATEWAY_MAX_DESCRIPTION_BYTES
+        ));
     }
     if config.providers.len() > MCP_GATEWAY_MAX_PROVIDERS {
         return Err(format!(
@@ -2285,8 +2305,34 @@ mod mcp_gateway_config_tests {
     fn validate(provider: McpGatewayProviderConfig) -> Result<(), String> {
         validate_mcp_gateway_config(&McpGatewayConfig {
             request_timeout_secs: 30,
+            max_tool_description_bytes: MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES,
             providers: vec![provider],
         })
+    }
+
+    #[test]
+    fn mcp_gateway_description_limit_has_bounded_operator_override() {
+        let default = McpGatewayConfig::default();
+        assert_eq!(default.max_tool_description_bytes, 64 * 1024);
+        validate_mcp_gateway_config(&default).unwrap();
+
+        let configured: McpGatewayConfig =
+            toml::from_str("max_tool_description_bytes = 131072\nrequest_timeout_secs = 30")
+                .unwrap();
+        assert_eq!(configured.max_tool_description_bytes, 128 * 1024);
+        validate_mcp_gateway_config(&configured).unwrap();
+
+        for invalid in [
+            0,
+            4095,
+            webcodex_core::mcp_gateway::MCP_GATEWAY_MAX_DESCRIPTION_BYTES + 1,
+        ] {
+            let mut config = McpGatewayConfig::default();
+            config.max_tool_description_bytes = invalid;
+            assert!(validate_mcp_gateway_config(&config)
+                .unwrap_err()
+                .contains("mcp.max_tool_description_bytes must be between"));
+        }
     }
 
     #[test]

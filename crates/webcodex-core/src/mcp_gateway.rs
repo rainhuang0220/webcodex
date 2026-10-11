@@ -16,8 +16,10 @@ pub const MCP_GATEWAY_MAX_PROVIDER_NAME_BYTES: usize = 128;
 pub const MCP_GATEWAY_MAX_TOOL_COUNT: usize = 128;
 pub const MCP_GATEWAY_MAX_TOOL_NAME_BYTES: usize = 128;
 /// Composite third-party tools keep operational documentation in `description`.
-/// The whole tools/list message remains capped by `MCP_GATEWAY_MAX_MESSAGE_BYTES`.
-pub const MCP_GATEWAY_MAX_DESCRIPTION_BYTES: usize = 64 * 1024;
+/// `DEFAULT` is a Runner operator setting; `MAX` is the protocol hard cap on
+/// both Runner and Server. The complete tools/list message remains bounded.
+pub const MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES: usize = 64 * 1024;
+pub const MCP_GATEWAY_MAX_DESCRIPTION_BYTES: usize = 256 * 1024;
 pub const MCP_GATEWAY_MAX_SCHEMA_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_ARGUMENT_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_STRUCTURED_CONTENT_BYTES: usize = 512 * 1024;
@@ -402,6 +404,17 @@ pub fn validate_providers(providers: &[McpGatewayProvider]) -> Result<(), String
 }
 
 pub fn validate_tools(tools: &[McpGatewayTool]) -> Result<(), String> {
+    validate_tools_with_description_limit(tools, MCP_GATEWAY_MAX_DESCRIPTION_BYTES)
+}
+
+/// Runner-owned local policy may narrow, but never raise, this protocol limit.
+pub fn validate_tools_with_description_limit(
+    tools: &[McpGatewayTool],
+    max_description_bytes: usize,
+) -> Result<(), String> {
+    if !(1..=MCP_GATEWAY_MAX_DESCRIPTION_BYTES).contains(&max_description_bytes) {
+        return Err("invalid MCP description bound".to_string());
+    }
     if tools.len() > MCP_GATEWAY_MAX_TOOL_COUNT {
         return Err(format!(
             "tool count exceeds maximum {}",
@@ -421,10 +434,10 @@ pub fn validate_tools(tools: &[McpGatewayTool]) -> Result<(), String> {
             validate_text_controls(title, "tool title")?;
         }
         if let Some(description) = tool.description.as_deref() {
-            if description.len() > MCP_GATEWAY_MAX_DESCRIPTION_BYTES {
+            if description.len() > max_description_bytes {
                 return Err(format!(
                     "tool '{}' description exceeds maximum {} bytes",
-                    tool.name, MCP_GATEWAY_MAX_DESCRIPTION_BYTES
+                    tool.name, max_description_bytes
                 ));
             }
             validate_text_controls(description, "tool description")?;
@@ -975,6 +988,14 @@ mod tests {
         };
         validate_tools(&[tool("timeline", 20_000), tool("echo", 32)])
             .expect("a 20000-byte composite description stays inside the gateway bound");
+        validate_tools_with_description_limit(&[tool("timeline", 96 * 1024)], 128 * 1024)
+            .expect("an explicit higher operator limit remains within the wire hard cap");
+        assert!(validate_tools_with_description_limit(
+            &[tool("timeline", 96 * 1024)],
+            MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES
+        )
+        .unwrap_err()
+        .contains("65536"));
         let error = validate_tools(&[tool("timeline", MCP_GATEWAY_MAX_DESCRIPTION_BYTES + 1)])
             .expect_err("one byte past the description bound is rejected");
         assert!(error.contains("timeline"), "{error}");

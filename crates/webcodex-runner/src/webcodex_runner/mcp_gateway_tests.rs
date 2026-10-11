@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tempfile::TempDir;
 use webcodex_core::mcp_gateway::{
     McpGatewayContent, McpGatewayResponsePayload, McpGatewaySchemaObservation,
-    MCP_GATEWAY_MAX_DESCRIPTION_BYTES, MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES,
+    MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES, MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES,
     MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
     MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES, MCP_GATEWAY_MAX_RESULT_BYTES,
 };
@@ -110,6 +110,7 @@ impl Fixture {
         }
         let manager = McpGatewayManager::new(&McpGatewayConfig {
             request_timeout_secs: default_timeout_secs,
+            max_tool_description_bytes: 64 * 1024,
             providers: vec![McpGatewayProviderConfig {
                 id: "fake".to_string(),
                 name: "Fake provider".to_string(),
@@ -439,6 +440,7 @@ fn replacement_config(
 ) -> McpGatewayConfig {
     McpGatewayConfig {
         request_timeout_secs,
+        max_tool_description_bytes: 64 * 1024,
         providers: vec![McpGatewayProviderConfig {
             id: id.to_string(),
             name: name.to_string(),
@@ -1135,9 +1137,71 @@ fn long_provider_description_is_listed_and_oversize_names_the_tool() {
     assert!(
         error
             .message
-            .contains(&MCP_GATEWAY_MAX_DESCRIPTION_BYTES.to_string()),
+            .contains(&MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES.to_string()),
         "{}",
         error.message
+    );
+}
+
+#[test]
+fn description_limit_reload_is_operator_owned_and_preserves_provider_identity() {
+    let fixture = Fixture::new("larger_description", 10);
+    let provider = fixture.provider();
+    let rejected = fixture.list(&provider);
+    assert_eq!(
+        rejected.error.as_ref().unwrap().code,
+        "invalid_provider_tools"
+    );
+    assert!(rejected.error.as_ref().unwrap().message.contains("65536"));
+    assert_eq!(fixture.marker_count("start"), 1);
+
+    let mut config =
+        replacement_config(&fixture, "fake", "Fake provider", "larger_description", 10);
+    config.max_tool_description_bytes = 128 * 1024;
+    let summary = fixture.manager.apply_config_candidate(&config).unwrap();
+    assert_eq!(summary.preserved, 1);
+    assert_eq!(summary.replaced, 0);
+    assert_eq!(
+        fixture.provider().provider_instance_id,
+        provider.provider_instance_id
+    );
+    let admitted = fixture.list(&provider);
+    assert!(admitted.error.is_none(), "{:?}", admitted.error);
+    let Some(McpGatewayResponsePayload::Tools { tools }) = admitted.payload else {
+        panic!("expected tools, got {:?}", admitted.payload);
+    };
+    assert_eq!(
+        tools[0].description.as_deref().map(str::len),
+        Some(96 * 1024)
+    );
+    assert_eq!(fixture.marker_count("start"), 1);
+    assert!(fixture.call(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("call"), 1);
+
+    config.max_tool_description_bytes = 8 * 1024;
+    let summary = fixture.manager.apply_config_candidate(&config).unwrap();
+    assert_eq!(summary.preserved, 1);
+    let rejected_again = fixture.list(&provider);
+    assert_eq!(
+        rejected_again.error.as_ref().unwrap().code,
+        "invalid_provider_tools"
+    );
+    let detail = &rejected_again.error.as_ref().unwrap().message;
+    assert!(
+        detail.contains("echo") && detail.contains("8192"),
+        "{detail}"
+    );
+    assert_eq!(fixture.marker_count("start"), 1);
+    let blocked_call = fixture.call(&provider);
+    assert_eq!(
+        blocked_call.dispatch_state,
+        McpGatewayDispatchState::NotStarted
+    );
+    assert_eq!(blocked_call.error.unwrap().code, "invalid_provider_tools");
+    assert_eq!(
+        fixture.marker_count("call"),
+        1,
+        "policy reload must not replay an effect"
     );
 }
 
