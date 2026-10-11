@@ -39,6 +39,8 @@ npx --yes @yyjeqhc/webcodex share
 
 不同账号或工作区看到的 ChatGPT 文案可能略有区别。Developer Mode、自定义 MCP App 和写入/修改操作是否可用也取决于 ChatGPT 套餐、workspace 与管理员策略；WebCodex 无法启用客户端未授予的权限。具体 URL 和认证值以 WebCodex 终端输出为准。
 
+ChatGPT Dot 目前是 best-effort，不同账号的表现可以不一致。如果 Dot 能发现插件但没有调用 WebCodex，见 [ChatGPT Dot](MCP.zh-CN.md#chatgpt-dot)。
+
 ### 如果找不到 Bearer/访问令牌选项
 
 如果 ChatGPT 自动尝试 OAuth 并出现 **does not implement OAuth**，或者当前客户端根本没有 Bearer 令牌输入框，先结束当前分享，再运行：

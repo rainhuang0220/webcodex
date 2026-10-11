@@ -22,6 +22,14 @@ The rejection comes from the ChatGPT host or the conversation-level Developer MC
 
 Check the Runner and project state independently. If they remain available and the request did not reach WebCodex, retry in a conversation where ChatGPT admits Developer MCPs. No WebCodex configuration change is required solely because this host-side error appeared.
 
+## ChatGPT Dot
+
+ChatGPT Dot support is best-effort. It depends on the plugin capabilities ChatGPT exposes for that Dot, and WebCodex does not define Dot as incompatible. Accounts and Dots can differ: some call WebCodex normally, while others discover the plugin and then ask to hand the work to a local Codex or local task. This project does not have a stable public description of when a Dot may operate on local resources directly, so this page does not treat one of those behaviors as the contract.
+
+If a Dot lists the plugin but does not dispatch calls to WebCodex, delete that Dot, create it again, and add or authorize the WebCodex plugin once more. The difference can involve plugin state, a cache, or the capabilities saved when the Dot was created, and recreation has sometimes changed the behavior. Keep the existing ChatGPT authentication and permission settings; recreation does not require a WebCodex credential or configuration change.
+
+If the same behavior remains after recreation, add the steps to [issue #955](https://github.com/yyjeqhc/webcodex/issues/955). Those steps let us judge whether WebCodex itself can improve the case.
+
 ## ChatGPT: temporary `share`
 
 Explicit `share` is supported on Linux, macOS, and Windows and owns a temporary single-project environment for that foreground run. Windows x64 can use the managed default Cloudflare Quick Tunnel; Windows ARM64 needs a trusted explicit/PATH `cloudflared` because the pinned Cloudflare release publishes no official ARM64 artifact. Native OpenAI Tunnel supports both Windows x64 and arm64.

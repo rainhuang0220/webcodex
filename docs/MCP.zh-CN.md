@@ -22,6 +22,14 @@ FORBIDDEN: This conversation does not support developer MCPs
 
 请独立检查 Runner 与项目状态。如果两者仍然可用，而且请求没有到达 WebCodex，请在 ChatGPT 允许 Developer MCP 的会话中重试。不要仅因出现这个 Host 侧错误就修改 WebCodex 配置。
 
+## ChatGPT Dot
+
+ChatGPT Dot 目前是 best-effort，取决于 ChatGPT 为该 Dot 提供的插件能力。WebCodex 不把 Dot 定义成不兼容。不同账号或 Dot 的表现可以不一致：有的能正常调用 WebCodex，有的能发现插件，随后却要求转交给本地 Codex 或本地任务。本项目还没有一份可以依赖的公开说明，用来确定 Dot 何时可以直接操作本机资源，因此这里不把其中某一种表现写成契约。
+
+如果插件可以发现，但调用没有发到 WebCodex，先删除该 Dot，再重新创建，并重新添加或授权 WebCodex 插件。差异可能来自插件状态、缓存，或创建 Dot 时保存的能力配置；重建有时会改变这一表现。保持现有的 ChatGPT 认证和权限设置；重建 Dot 不需要修改 WebCodex 凭据或配置。
+
+如果重建后同一现象仍然稳定出现，把复现步骤补充到 [issue #955](https://github.com/yyjeqhc/webcodex/issues/955)。这些步骤用来判断 WebCodex 自身是否还能改善这种情况。
+
 ## ChatGPT：临时 `share`
 
 显式 `share` 支持 Linux、macOS 与 Windows，并由当前前台进程持有临时单项目环境。Windows x64 可直接使用 managed 默认 Cloudflare Quick Tunnel；固定版本 Cloudflare 没有官方 Windows ARM64 artifact，因此 ARM64 需要受信任的显式/`PATH` `cloudflared`。原生 OpenAI Tunnel 支持 Windows x64/arm64。

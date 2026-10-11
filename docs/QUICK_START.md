@@ -39,6 +39,8 @@ Keep that terminal open. WebCodex prints the values needed by the MCP client. On
 
 ChatGPT labels can vary by workspace and rollout. Developer Mode, custom MCP Apps, and write/modify actions also depend on your ChatGPT plan, workspace, and administrator policy; WebCodex cannot enable capabilities the client does not grant. The values printed by WebCodex are the source of truth.
 
+ChatGPT Dot is best-effort and can differ by account. If a Dot discovers the plugin but does not call WebCodex, see [ChatGPT Dot](MCP.md#chatgpt-dot).
+
 ### If there is no Bearer/access-token option
 
 If ChatGPT tries OAuth automatically and reports **does not implement OAuth**, or your client has no Bearer-token field, stop the current share and run:
