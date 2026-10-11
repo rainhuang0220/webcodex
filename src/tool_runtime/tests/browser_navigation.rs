@@ -82,6 +82,7 @@ async fn control_browser_navigation_failure_preserves_completed_execution_and_ob
     let result = outcome.result.unwrap();
     assert!(!result.success);
     assert_eq!(result.output["execution_state"], "completed");
+    assert_eq!(result.output["state_changed"], true);
     assert_eq!(result.output["error_kind"], "navigation_failed");
     assert_eq!(result.output["message"], message);
     assert_eq!(result.error.as_deref(), Some(message));
@@ -108,4 +109,88 @@ async fn control_browser_navigation_failure_preserves_completed_execution_and_ob
             .is_none(),
         "a navigation failure must not enqueue a retry"
     );
+}
+
+#[tokio::test]
+async fn control_browser_effect_reports_state_changed_only_when_execution_completed() {
+    for (execution_state, state_changed) in [("completed", true), ("not_started", false)] {
+        let client_id = format!("browser-collector-{execution_state}");
+        let runtime = test_runtime()
+            .with_permission_evaluator(PermissionEvaluator::with_mode(AuthorityMode::TrustedAgent));
+        let mut auth = open_auth_context();
+        auth.scopes.push(crate::auth::SCOPE_BROWSER_CONTROL.into());
+        register_agent_projects_for_auth(
+            &runtime,
+            &client_id,
+            &auth,
+            RunnerCapabilities {
+                browser_control: true,
+                ..Default::default()
+            },
+            vec![],
+        )
+        .await;
+        let task = tokio::spawn({
+            let runtime = runtime.clone();
+            let auth = auth.clone();
+            let client_id = client_id.clone();
+            async move {
+                try_dispatch_specialized_gateway(
+                    &runtime,
+                    &ToolCallRequest {
+                        tool_name: "control_browser".into(),
+                        arguments: json!({
+                            "action": "navigate",
+                            "client_id": client_id,
+                            "browser_id": "browser_fixture",
+                            "page_id": "page_fixture",
+                            "url": "https://example.test/"
+                        }),
+                    },
+                    ToolCallContext {
+                        transport: ToolTransport::Api,
+                        session_id: None,
+                        auth: Some(&auth),
+                        window: None,
+                        record_oauth_scope_denials: true,
+                        host_file_import_trust: HostFileImportTrust::Untrusted,
+                    },
+                )
+                .await
+                .unwrap()
+            }
+        });
+        let request = wait_for_runner_request_for_client(&runtime, &client_id).await;
+        assert_eq!(request.kind, "browser_navigate");
+        let message = "CDP observation returned an error: collector disabled";
+        complete_patch_agent_request_for_instance(
+            &runtime,
+            &client_id,
+            &format!("inst-{client_id}"),
+            &request.request_id,
+            0,
+            &json!({
+                "ok": false,
+                "execution_state": execution_state,
+                "error": {
+                    "kind": "cdp_error",
+                    "message": message,
+                    "execution_state": execution_state
+                }
+            })
+            .to_string(),
+            "",
+        )
+        .await;
+        let result = task.await.unwrap().result.unwrap();
+        assert!(!result.success, "{execution_state}");
+        assert_eq!(result.output["execution_state"], execution_state);
+        assert_eq!(
+            result.output["state_changed"], state_changed,
+            "{execution_state}"
+        );
+        assert_eq!(result.output["error_kind"], "cdp_error");
+        assert_eq!(result.output["message"], message);
+        assert!(result.output.get("recovery").is_none(), "{execution_state}");
+    }
 }

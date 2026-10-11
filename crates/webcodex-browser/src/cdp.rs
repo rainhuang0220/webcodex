@@ -728,6 +728,15 @@ impl CdpBackend {
         Ok(())
     }
 
+    /// Collector setup is read-only, but effect methods run it before any
+    /// command that can change the page. A failure here has not started that
+    /// command, so it must not be reported as `Completed`: tool results treat a
+    /// completed effect error as `state_changed`.
+    fn ensure_event_collector_before_effect(&mut self, target_id: &str) -> BrowserResult<()> {
+        self.ensure_event_collector(target_id)
+            .map_err(pre_dispatch_error)
+    }
+
     fn drain_target_collector(&mut self, target_id: &str) -> BrowserResult<()> {
         let result = {
             let collector = self
@@ -1287,7 +1296,7 @@ impl BrowserBackend for CdpBackend {
     }
 
     fn clear_diagnostics(&mut self, target_id: &str) -> BrowserResult<()> {
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let next_id = &mut self.next_id;
         let collector = self
             .collectors
@@ -1297,7 +1306,7 @@ impl BrowserBackend for CdpBackend {
     }
 
     fn navigate(&mut self, target_id: &str, url: &str) -> BrowserResult<()> {
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         let result = self.page_call_until(
             target_id,
@@ -1325,14 +1334,14 @@ impl BrowserBackend for CdpBackend {
     }
 
     fn reload(&mut self, target_id: &str) -> BrowserResult<()> {
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         self.page_call_until(target_id, "Page.reload", json!({}), true, deadline)
             .map(|_| ())
     }
 
     fn click(&mut self, target_id: &str, backend_node_id: i64) -> BrowserResult<()> {
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         // CDP mouse coordinates are viewport-relative. Ensure off-screen
         // controls are visible before deriving the box-model click point.
@@ -1407,7 +1416,7 @@ impl BrowserBackend for CdpBackend {
         backend_node_id: i64,
         text: &str,
     ) -> BrowserResult<()> {
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         self.page_call_until(
             target_id,
@@ -1467,7 +1476,7 @@ impl BrowserBackend for CdpBackend {
             }
             return { ok: true };
         }"#;
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         self.call_element_function_until(
             target_id,
@@ -1485,7 +1494,7 @@ impl BrowserBackend for CdpBackend {
         value: &str,
     ) -> BrowserResult<()> {
         const SET_VALUE: &str = include_str!("cdp/set_value.js");
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         self.call_element_function_until(
             target_id,
@@ -1508,7 +1517,7 @@ impl BrowserBackend for CdpBackend {
             include_str!("cdp/widgets/choice.js"),
             "\n}"
         );
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         self.call_element_function_until(
             target_id,
             backend_node_id,
@@ -1530,7 +1539,7 @@ impl BrowserBackend for CdpBackend {
             include_str!("cdp/widgets/date.js"),
             "\n}"
         );
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         self.call_element_function_until(
             target_id,
             backend_node_id,
@@ -1552,7 +1561,7 @@ impl BrowserBackend for CdpBackend {
                 "Browser upload path is not representable as a CDP UTF-8 path",
             )
         })?;
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         self.page_call_until(
             target_id,
@@ -1569,7 +1578,7 @@ impl BrowserBackend for CdpBackend {
     }
 
     fn key(&mut self, target_id: &str, key: BrowserKey) -> BrowserResult<()> {
-        self.ensure_event_collector(target_id)?;
+        self.ensure_event_collector_before_effect(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         let (key_name, code, text) = key.cdp();
         self.page_call_until(

@@ -2,6 +2,10 @@ use super::*;
 use crate::types::ExecutionState;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 
 fn accept_until(listener: &TcpListener, deadline: Instant) -> TcpStream {
@@ -362,4 +366,366 @@ fn ax_missing_descendants_remain_incomplete_for_queries() {
         json!({"nodeId":"root","childIds":["child"]}),
         json!({"nodeId":"child"})
     ]));
+}
+
+/// Which scripted CDP response should fail. The collector websocket stays open
+/// after a successful attach, so later effect commands arrive on new connections
+/// and must be handled concurrently with that held socket.
+#[derive(Clone, Copy)]
+enum ScriptedCdpFault {
+    Method {
+        name: &'static str,
+        occurrence: usize,
+    },
+    NavigateErrorText,
+}
+
+fn scripted_cdp_result(method: &str) -> Value {
+    match method {
+        "DOM.getBoxModel" => json!({
+            "model": {"content": [0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]}
+        }),
+        "DOM.resolveNode" => json!({"object": {"objectId": "fixture-object"}}),
+        "Runtime.callFunctionOn" => json!({"result": {"value": {"ok": true}}}),
+        _ => json!({}),
+    }
+}
+
+fn starts_with_page_list(stream: &TcpStream) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut preview = [0u8; 14];
+    loop {
+        match stream.peek(&mut preview) {
+            Ok(n) if preview[..n].starts_with(b"GET /json/list") => return true,
+            Ok(n) if n >= 14 || (n >= 4 && !preview[..n].starts_with(b"GET ")) => return false,
+            Ok(_) if Instant::now() >= deadline => return false,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("scripted CDP peek failed: {error}"),
+            Ok(_) => thread::sleep(Duration::from_millis(1)),
+        }
+    }
+}
+
+fn write_page_list(mut stream: TcpStream, address: std::net::SocketAddr) {
+    let mut reader = BufReader::new(&mut stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(
+        line.starts_with("GET /json/list"),
+        "unexpected CDP list request: {line:?}"
+    );
+    loop {
+        line.clear();
+        assert!(reader.read_line(&mut line).unwrap() > 0);
+        if line == "\r\n" {
+            break;
+        }
+    }
+    drop(reader);
+    let body = json!([{
+        "id": "exact-target",
+        "type": "page",
+        "title": "fixture",
+        "url": "about:blank",
+        "webSocketDebuggerUrl": format!("ws://{address}/exact-target")
+    }])
+    .to_string();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+}
+
+fn serve_page_websocket(
+    stream: TcpStream,
+    methods: Arc<Mutex<Vec<String>>>,
+    fault: ScriptedCdpFault,
+) {
+    let mut websocket = tungstenite::accept(stream).unwrap();
+    loop {
+        let request = match websocket.read() {
+            Ok(Message::Text(text)) => text,
+            _ => break,
+        };
+        let request: Value = serde_json::from_str(&request).unwrap();
+        let method = request["method"].as_str().unwrap_or_default().to_string();
+        let occurrence = {
+            let mut seen = methods.lock().unwrap();
+            seen.push(method.clone());
+            seen.iter().filter(|seen| *seen == &method).count()
+        };
+        let fail = matches!(
+            fault,
+            ScriptedCdpFault::Method { name, occurrence: expected }
+                if name == method && expected == occurrence
+        );
+        let response = if fail {
+            json!({
+                "id": request["id"],
+                "error": {"code": -32000, "message": "collector disabled"}
+            })
+        } else if matches!(fault, ScriptedCdpFault::NavigateErrorText) && method == "Page.navigate"
+        {
+            json!({
+                "id": request["id"],
+                "result": {"errorText": "net::ERR_FAILED"}
+            })
+        } else {
+            json!({"id": request["id"], "result": scripted_cdp_result(&method)})
+        };
+        if websocket
+            .send(Message::Text(response.to_string().into()))
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
+fn owned_cdp_backend(address: std::net::SocketAddr) -> CdpBackend {
+    // Supply the backend's process owner without requiring Chromium or a shell.
+    // The child has already exited; effect commands use only the scripted endpoint.
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .arg("--list")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = ManagedChild::spawn(&mut command).unwrap();
+    assert!(child.wait_tree_exit(Duration::from_secs(3)).unwrap());
+    CdpBackend {
+        owner: CdpOwner::Owned {
+            child,
+            profile: OwnedProfile::Ephemeral(tempfile::tempdir().unwrap()),
+            endpoint: Url::parse(&format!("ws://{address}/browser")).unwrap(),
+        },
+        next_id: 1,
+        collectors: HashMap::new(),
+    }
+}
+
+fn run_scripted_page<T>(
+    fault: ScriptedCdpFault,
+    invoke: impl FnOnce(&mut CdpBackend) -> BrowserResult<T>,
+) -> (BrowserResult<T>, Vec<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&methods);
+    let stop = Arc::new(AtomicBool::new(false));
+    let server_stop = Arc::clone(&stop);
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !server_stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    if starts_with_page_list(&stream) {
+                        write_page_list(stream, address);
+                    } else {
+                        let methods = Arc::clone(&methods);
+                        thread::spawn(move || serve_page_websocket(stream, methods, fault));
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("scripted CDP accept failed: {error}"),
+            }
+        }
+    });
+    let mut backend = owned_cdp_backend(address);
+    let result = invoke(&mut backend);
+    let seen = recorded.lock().unwrap().clone();
+    stop.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    drop(backend);
+    (result, seen)
+}
+
+#[test]
+fn effect_collector_failure_before_dispatch_is_not_started() {
+    let cases: Vec<(
+        &str,
+        &str,
+        Box<dyn FnMut(&mut CdpBackend) -> BrowserResult<()>>,
+    )> = vec![
+        (
+            "navigate",
+            "Page.navigate",
+            Box::new(|backend| backend.navigate("exact-target", "https://example.test/")),
+        ),
+        (
+            "reload",
+            "Page.reload",
+            Box::new(|backend| backend.reload("exact-target")),
+        ),
+        (
+            "click",
+            "Input.dispatchMouseEvent",
+            Box::new(|backend| backend.click("exact-target", 7)),
+        ),
+        (
+            "input_text",
+            "Input.insertText",
+            Box::new(|backend| backend.input_text("exact-target", 7, "hello")),
+        ),
+        (
+            "select_option",
+            "Runtime.callFunctionOn",
+            Box::new(|backend| backend.select_option("exact-target", 7, "red")),
+        ),
+        (
+            "set_value",
+            "Runtime.callFunctionOn",
+            Box::new(|backend| backend.set_value("exact-target", 7, "red")),
+        ),
+        (
+            "select_choice",
+            "Runtime.callFunctionOn",
+            Box::new(|backend| backend.select_choice("exact-target", 7, &["red".to_string()])),
+        ),
+        (
+            "set_date",
+            "Runtime.callFunctionOn",
+            Box::new(|backend| backend.set_date("exact-target", 7, "2026-01-02")),
+        ),
+        (
+            "upload_file",
+            "DOM.setFileInputFiles",
+            Box::new(|backend| backend.upload_file("exact-target", 7, Path::new("resume.txt"))),
+        ),
+        (
+            "key",
+            "Input.dispatchKeyEvent",
+            Box::new(|backend| backend.key("exact-target", BrowserKey::Enter)),
+        ),
+        (
+            "clear_diagnostics",
+            "Page.getFrameTree",
+            Box::new(|backend| backend.clear_diagnostics("exact-target")),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (action, forbidden, mut invoke) in cases {
+        let (result, methods) = run_scripted_page(
+            ScriptedCdpFault::Method {
+                name: "Runtime.enable",
+                occurrence: 1,
+            },
+            |backend| invoke(backend),
+        );
+        let error = match result {
+            Ok(_) => {
+                failures.push(format!("{action}: collector failure returned success"));
+                continue;
+            }
+            Err(error) => error,
+        };
+        if error.execution_state != ExecutionState::NotStarted {
+            failures.push(format!(
+                "{action}: execution_state {:?}, kind {}, recovery {:?}, methods {methods:?}",
+                error.execution_state, error.kind, error.recovery_action
+            ));
+        }
+        if error.kind != "cdp_error" {
+            failures.push(format!("{action}: kind {}", error.kind));
+        }
+        if error.recovery_action.is_some() {
+            failures.push(format!("{action}: recovery {:?}", error.recovery_action));
+        }
+        if methods != ["Runtime.enable"] {
+            failures.push(format!("{action}: methods {methods:?}"));
+        }
+        if methods.iter().any(|method| method == forbidden) {
+            failures.push(format!("{action}: dispatched {forbidden}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "pre-effect collector failures were reported as started effects:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn click_failure_after_mouse_press_stays_outcome_unknown() {
+    let (result, methods) = run_scripted_page(
+        ScriptedCdpFault::Method {
+            name: "Input.dispatchMouseEvent",
+            occurrence: 2,
+        },
+        |backend| backend.click("exact-target", 7),
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.execution_state, ExecutionState::OutcomeUnknown);
+    assert_eq!(error.kind, "cdp_effect_error");
+    assert_eq!(error.recovery_action, Some("snapshot"));
+    assert_eq!(
+        methods,
+        [
+            "Runtime.enable",
+            "Log.enable",
+            "Network.enable",
+            "DOM.scrollIntoViewIfNeeded",
+            "DOM.getBoxModel",
+            "Input.dispatchMouseEvent",
+            "Input.dispatchMouseEvent",
+        ]
+    );
+}
+
+#[test]
+fn navigate_error_after_dispatch_stays_completed() {
+    let (result, methods) = run_scripted_page(ScriptedCdpFault::NavigateErrorText, |backend| {
+        backend.navigate("exact-target", "https://example.test/")
+    });
+    let error = result.unwrap_err();
+    assert_eq!(error.execution_state, ExecutionState::Completed);
+    assert_eq!(error.kind, "navigation_failed");
+    assert_eq!(error.recovery_action, Some("snapshot"));
+    assert_eq!(
+        methods,
+        [
+            "Runtime.enable",
+            "Log.enable",
+            "Network.enable",
+            "Page.navigate",
+        ]
+    );
+}
+
+#[test]
+fn console_collector_failure_stays_completed_observation() {
+    let (result, methods) = run_scripted_page(
+        ScriptedCdpFault::Method {
+            name: "Runtime.enable",
+            occurrence: 1,
+        },
+        |backend| backend.console("exact-target"),
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.execution_state, ExecutionState::Completed);
+    assert_eq!(error.kind, "cdp_error");
+    assert!(error.recovery_action.is_none());
+    assert_eq!(methods, ["Runtime.enable"]);
 }
