@@ -196,7 +196,17 @@ async function control(message, epoch) {
     const original = await chrome.tabs.get(message.tab);
     requireLease(lease);
     const tab = await chrome.tabs.create({windowId: original.windowId, url: 'about:blank', active: false});
-    await attachTab(lease, tab.id);
+    try {
+      await attachTab(lease, tab.id);
+    } catch (error) {
+      // attachTab drops its reservation before throwing. This id then has no
+      // page the Runner can close. Remove only that unleased tab. A tab still
+      // owned by any lease, including the original shared tab, stays open.
+      if (tab.id !== lease.originalTab && !tabLease.has(tab.id) && !lease.tabs.has(tab.id)) {
+        try { await chrome.tabs.remove(tab.id); } catch { /* Already closed. */ }
+      }
+      throw error;
+    }
     return {targetId: `tab_${tab.id}`};
   }
   if (method === 'close_page') {

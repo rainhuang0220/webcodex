@@ -42,6 +42,26 @@ test('disconnect during new-page lookup cannot create a later unowned tab',async
     assert(!f.calls.some(call=>call[0]==='create'));
   } finally {await f.cleanup();}
 });
+test('failed new_page attach closes only the unleased tab it created',async()=>{
+  const f=fixture();try {
+    await f.share();await f.command('attach');
+    await f.command('new_page',{url:'about:blank'});
+    f.setAttachHook(()=>{throw Error('attach failed');});
+    await f.command('new_page',{url:'about:blank'});
+    assert.equal(f.sent.at(-1).message.error.code,'external_operation_failed');
+    assert(!f.tabs.has(9),'created tab must not survive a failed attach');
+    assert(f.tabs.has(7)&&f.tabs.has(8));
+    assert.deepEqual(f.calls.filter(call=>call[0]==='remove'),[['remove',9]]);
+    assert(!f.sent.some(message=>message.kind==='revoke'));
+    assert.equal(vm.runInContext('leases.size',f.context),1);
+    assert.equal(vm.runInContext('tabLease.has(7)&&tabLease.has(8)&&!tabLease.has(9)',f.context),true);
+    f.setAttachHook(null);
+    await f.command('Page.getFrameTree',{},'cdp','tab_7');
+    assert(f.sent.at(-1).message.result);
+    await f.command('Page.getFrameTree',{},'cdp','tab_8');
+    assert(f.sent.at(-1).message.result);
+  } finally {await f.cleanup();}
+});
 function event() {
   const listeners = [];
   return {addListener(fn) { listeners.push(fn); }, emit(...args) { for (const fn of listeners) fn(...args); }, listeners};
