@@ -180,16 +180,21 @@ footer { padding: 12px 24px; border-top: 1px solid var(--border); color: var(--m
     });
   }
   function envelope(result) {
-    if (object(result?.result)) result = result.result;
+    // Hosts can replace structuredContent. Keep the server text copy ahead of that projection.
     const valid = v => object(v) && typeof v.success === "boolean" && ("output" in v || "error" in v);
-    if (valid(result?.structuredContent)) return result.structuredContent;
-    if (valid(result)) return result;
-    let bytes = 0;
-    for (const block of (Array.isArray(result?.content) ? result.content.slice(0,16) : [])) {
-      if (block?.type !== "text" || typeof block.text !== "string") continue;
-      bytes += new TextEncoder().encode(block.text).length;
-      if (bytes > MAX_JSON) break;
-      try { const value = JSON.parse(block.text); if (valid(value)) return value; } catch (_) {}
+    const candidates = [result, result?.result, result?.toolResult, result?.tool_result].filter(object);
+    for (const candidate of candidates) {
+      if (valid(candidate)) return candidate;
+      let bytes = 0;
+      for (const block of (Array.isArray(candidate.content) ? candidate.content.slice(0,16) : [])) {
+        if (block?.type !== "text" || typeof block.text !== "string") continue;
+        bytes += new TextEncoder().encode(block.text).length;
+        if (bytes > MAX_JSON) break;
+        try { const value = JSON.parse(block.text); if (valid(value)) return value; } catch (_) {}
+      }
+    }
+    for (const candidate of candidates) {
+      if (valid(candidate.structuredContent)) return candidate.structuredContent;
     }
     throw new Error("Missing or invalid structured tool result");
   }

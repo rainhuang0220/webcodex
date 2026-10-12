@@ -570,3 +570,53 @@ test("selected context rejects a replaced Project root instead of retargeting th
   assert.equal(refs(view).length,0);
   assert.match(view.nodes.referenceStatus.textContent,/root changed/);
 });
+
+const serverText = value => ({ type: "text", text: JSON.stringify(value) });
+const runnerValues = view => [...view.nodes.runnerSelect.children].map(node => node.value);
+
+test("a canonical host projection does not mask the server runner inventory", async () => {
+  const view = app("mcp_workbench_app.html");
+  view.toolInput({});
+  await initialize(view);
+  await view.reply(view.calls("list_runners")[0], {
+    structuredContent: { success: true, output: { projected: true } },
+    content: [serverText({ success: true, output: runnerPage })],
+  });
+  assert.deepEqual(runnerValues(view), ["", runnerId, "other"]);
+});
+
+for (const key of ["result", "toolResult", "tool_result"]) {
+  test(`an outer host projection does not mask a nested ${key} server runner envelope`, async () => {
+    const view = app("mcp_workbench_app.html");
+    view.toolInput({});
+    await initialize(view);
+    await view.reply(view.calls("list_runners")[0], {
+      structuredContent: { success: true, output: { projected: true } },
+      [key]: { content: [serverText({ success: true, output: runnerPage })] },
+    });
+    assert.deepEqual(runnerValues(view), ["", runnerId, "other"]);
+  });
+}
+
+test("a nested server failure takes precedence over a successful host runner projection", async () => {
+  const view = app("mcp_workbench_app.html");
+  view.toolInput({});
+  await initialize(view);
+  await view.reply(view.calls("list_runners")[0], {
+    structuredContent: { success: true, output: runnerPage },
+    toolResult: { content: [serverText({ success: false, error: "Server rejected this inventory" })] },
+  });
+  assert.match(view.nodes.status.textContent, /Server rejected this inventory/);
+  assert.deepEqual(runnerValues(view), [""]);
+});
+
+test("launcher text keeps projects when a canonical host projection drops them", async () => {
+  const view = app("mcp_workbench_app.html");
+  view.notification("ui/notifications/tool-result", {
+    structuredContent: { success: true, output: { projected: true } },
+    content: [serverText({ success: true, output: { runners: runnerPage, projects: page([projectItem]) } })],
+  });
+  await initialize(view);
+  assert.deepEqual(runnerValues(view), ["", runnerId, "other"]);
+  assert.equal(view.nodes.projectSelect.children[1].textContent, "Demo Project · /repo/demo");
+});
