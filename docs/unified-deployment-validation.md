@@ -70,6 +70,14 @@ The earlier pre-Environment Linux handoff described during unified-environment d
 
 A successful cross-compiled build or package inspection is useful packaging evidence, but does not satisfy a native row above. Record OS version, architecture, installer artifact identity, exact steps, observed result, and relevant logs for each completed row. Never include tokens, passwords, or other secrets in evidence.
 
+## Debian/Ubuntu `.deb` lifecycle harness
+
+`scripts/deb_lifecycle_acceptance.py` is an operator checklist for one supplied `.deb`. `scripts/package_unified_installer.py` remains the packager. The default run writes a plan. It reads package control with `dpkg-deb -f` when that command exists, and it does not install, purge, or change services. Mutating steps require `--execute` and `--disposable-environment LABEL` on a host the operator can destroy. The harness does not call sudo. Run it as a user who can already invoke `dpkg` and `systemctl`. Child processes get a closed stdin, a reduced environment, `DEBIAN_FRONTEND=noninteractive`, and `systemctl --no-ask-password`. An interactive prompt fails instead of waiting. A timed-out command is killed with its process group. These controls do not change unrelated system configuration.
+
+Upgrade stays `UNTESTED` unless `--previous-deb` is supplied, and the candidate version must be newer or the upgrade step fails before `dpkg -i`. Reboot persistence stays `UNTESTED`. The harness does not reboot or enable units. The manual reboot check is in the report's `reboot` step. `systemd_acceptance_candidate` covers start, health, and restart only. It does not cover reboot persistence. Fresh packages do not install systemd units, so unit start, health, and restart stay `NOT_APPLICABLE` unless units already exist and `--exercise-existing-units` is set. That flag lets install and uninstall continue when `webcodex*.service` units are already present. The install path starts and restarts those units, then stops them before purge. The uninstall-only path purges without starting them. Runner prerequisite evidence is executable presence only. The harness does not execute the `webcodex` CLI. `systemctl start` of an existing unit can still run the packaged service. Package commands do not receive the parent process environment, so ambient tokens are not forwarded.
+
+Docker marker files, `/run/.containerenv`, `/run/systemd/container`, and common container cgroup paths cannot produce a native Debian/Ubuntu acceptance claim. That includes arm64 Docker. Fake-runner unit tests exercise the checklist. They do not accept a matrix row. Candidate flags in a report are review input. This tool does not edit the matrix above. Update a row only after a reviewed native run on that distribution, version, and architecture. Do not record a native row for a container the checklist did not recognize.
+
 ## Workflow and security checks
 
 - Create on the central Server machine and join from repository machines B and C. Confirm a Server-only central node can see both remote projects while paths remain Runner-local.
@@ -152,6 +160,14 @@ Linux/macOS 升级使用分阶段的 owner 授权流程：原用户运行 `upgra
 统一环境开发阶段描述的 pre-Environment Linux 服务移交属于历史记录，不是 v0.5 CLI 操作。当前升级验收以已有 v0.4.6 或更新版本 Environment 为起点；更早的安装须先经过该已发布版本桥接。保留原服务所有者/范围、身份、凭据和恢复记录，验证桥接后再升级至 v0.5。遵循[兼容策略](compatibility-policy.md#the-actual-stable-upgrade-sources)，不得通过重新配对或猜测自定义服务所有权绕过桥接。
 
 交叉编译成功或检查包内容属于有用的打包证据，但不满足上表原生验收。每项完成后记录 OS 版本、架构、安装包身份、操作步骤、观察结果和相关日志。证据中不得包含 token、密码或其他密钥。
+
+### Debian/Ubuntu `.deb` 生命周期验收程序
+
+`scripts/deb_lifecycle_acceptance.py` 是针对一份已有 `.deb` 的操作者验收清单。构建仍由 `scripts/package_unified_installer.py` 负责。默认运行只输出计划；本机有 `dpkg-deb` 时会用 `dpkg-deb -f` 读取控制信息，不会安装、清除或更改服务。会改变系统的步骤必须同时提供 `--execute` 和 `--disposable-environment LABEL`，并且只在操作者可以销毁的 Linux 主机上执行。程序不调用 sudo，需要由已经能够运行 `dpkg` 和 `systemctl` 的用户执行。子进程使用关闭的 stdin、裁剪后的环境、`DEBIAN_FRONTEND=noninteractive` 和 `systemctl --no-ask-password`。交互提示会失败，而不是一直等待。超时的命令会连同进程组一起终止。这些控制不更改无关系统配置。
+
+未提供 `--previous-deb` 时，升级保持 `UNTESTED`。提供旧包时，候选版本必须更高，否则在 `dpkg -i` 之前判定升级失败。程序不重启主机，也不启用单元，因此重启持久性保持 `UNTESTED`。人工复查步骤写在报告的 `reboot` 步骤里。`systemd_acceptance_candidate` 只覆盖启动、健康检查和重启，不覆盖重启持久性。新包装不安装 systemd 单元。只有这些单元已经存在，并且传入 `--exercise-existing-units` 时，才会执行启动、健康检查和重启；否则这些步骤是 `NOT_APPLICABLE`。已有 `webcodex*.service` 时，这个标志才允许安装和卸载继续。安装路径会启动并重启这些单元，然后在清除软件包之前停止它们。仅卸载路径只清除软件包，不启动单元。Runner 前提只检查可执行文件是否存在。程序不执行 `webcodex` CLI。`systemctl start` 已有单元时，仍可能运行包内服务。包命令不会继承父进程的全部环境，因此不会转发环境中的 token。
+
+Docker 标记文件、`/run/.containerenv`、`/run/systemd/container` 和常见容器 cgroup 路径不能作为 Debian/Ubuntu 原生验收，其中包括 arm64 Docker。fake-runner 单元测试只验证这份清单。报告里的 candidate 标志只供复核，程序不会改写上面的矩阵。只有在对应发行版、版本和架构上完成并复核原生运行之后，才更新相应一行。清单没有识别出的容器，也不要记成原生验收。
 
 ### 流程与安全检查
 

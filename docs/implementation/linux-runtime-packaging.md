@@ -103,3 +103,12 @@ passing. Repository-local Markdown links (772) and diff formatting passed.
 The earlier 464-test tooling run remains tied to its earlier source; native
 package installation and release publication remain unexecuted. CI fixes are
 commits in the existing dependent feature PRs, not separate prerequisite PRs.
+
+`scripts/deb_lifecycle_acceptance.py` is the operator checklist for one existing
+`.deb`. It does not build packages and does not replace
+`scripts/package_unified_installer.py`. Its default run prints a plan. The
+fake-runner unit tests cover refusal, install failure, timeout, interrupt, and
+uninstall recovery. They do not accept a native Debian or Ubuntu row. Upgrade
+stays `UNTESTED` without `--previous-deb`. A recognized container, including
+arm64 Docker, cannot claim native systemd acceptance, and the checklist does
+not edit the acceptance matrix.
