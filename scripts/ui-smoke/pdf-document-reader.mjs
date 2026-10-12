@@ -88,7 +88,7 @@ try {
           if (message.params.name !== 'read_app_artifact_chunk'
             || ['project', 'path', 'sha256', 'bytes'].some(key => args[key] !== sample.identity[key])) {
             fixture.errors.push('Unpinned or unexpected artifact request');
-            return reply(message.id, { structuredContent: { success: false } });
+            return reply(message.id, { structuredContent: { success: false, error: "unexpected artifact request" } });
           }
           const requestedSample = sample;
           const finish = () => {
@@ -370,7 +370,7 @@ try {
         await painted(frame, 1);
       } else {
         await page.evaluate(() => document.querySelector('iframe').contentWindow.postMessage({ jsonrpc: '2.0',
-          method: 'ui/notifications/tool-result', params: { structuredContent: { success: false } } }, '*'));
+          method: 'ui/notifications/tool-result', params: { structuredContent: { success: false, error: "present failed" } } }, '*'));
         await frame.getByRole('status').filter({ hasText: 'present_pdf did not succeed' }).waitFor();
       }
       assert.equal(await frame.evaluate(() => pdfHostTimers.size), 0, 'Old transfer retained its Host timeout');

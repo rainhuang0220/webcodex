@@ -31,23 +31,35 @@ function close() {
   for (const entry of pending.values()) entry.reject(new Error("PDF reader closed"));
   pending.clear();
 }
+function canonicalEnvelope(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+    && typeof value.success === "boolean"
+    && (Object.prototype.hasOwnProperty.call(value, "output") || Object.prototype.hasOwnProperty.call(value, "error"));
+}
+function textEnvelope(candidate) {
+  if (!Array.isArray(candidate.content)) return null;
+  for (const block of candidate.content) {
+    if (!block || block.type !== "text" || typeof block.text !== "string" || block.text.length > 400_000) continue;
+    try {
+      const parsed = JSON.parse(block.text);
+      if (canonicalEnvelope(parsed)) return parsed;
+    } catch {}
+  }
+  return null;
+}
+// Hosts can replace structuredContent. Prefer the Server text copy, then the
+// private Server copy, and accept a Host projection only when it is still canonical.
 function envelope(result) {
   const candidates = [result, result?.result, result?.toolResult, result?.tool_result];
   for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    if (typeof candidate.success === "boolean") return candidate;
-    const structured = candidate.structuredContent ?? candidate.structured_content;
-    if (structured && typeof structured === "object") return structured;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    if (canonicalEnvelope(candidate)) return candidate;
+    const text = textEnvelope(candidate);
+    if (text) return text;
     const privateResult = candidate._meta?.["webcodex/pdfDocument"] ?? candidate.meta?.["webcodex/pdfDocument"];
-    if (privateResult && typeof privateResult === "object") return privateResult;
-    for (const block of candidate.content || []) {
-      if (block.type === "text") {
-        try {
-          const value = JSON.parse(block.text);
-          if (typeof value.success === "boolean") return value;
-        } catch {}
-      }
-    }
+    if (canonicalEnvelope(privateResult)) return privateResult;
+    const structured = candidate.structuredContent ?? candidate.structured_content;
+    if (canonicalEnvelope(structured)) return structured;
   }
   return null;
 }
