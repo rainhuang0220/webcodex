@@ -106,7 +106,9 @@ commits in the existing dependent feature PRs, not separate prerequisite PRs.
 
 `scripts/deb_lifecycle_acceptance.py` is the operator checklist for one existing
 `.deb`. It does not build packages and does not replace
-`scripts/package_unified_installer.py`. Its default run prints a plan. The
+`scripts/package_unified_installer.py`. Its default run prints a plan. The artifact hash and package-metadata validity
+are separate results. A normal lifecycle does not install or purge when the
+target package or its conflicting package is already installed. The
 fake-runner unit tests cover refusal, install failure, timeout, interrupt, and
 uninstall recovery. They do not accept a native Debian or Ubuntu row. Upgrade
 stays `UNTESTED` without `--previous-deb`. A recognized container, including

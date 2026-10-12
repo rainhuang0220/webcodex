@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Check one Debian/Ubuntu .deb lifecycle without becoming a second installer.
 
-The default run hashes the artifact and prints a plan. It does not install,
-purge, or change services. --execute also requires --disposable-environment
-LABEL and is only for a Linux host the operator can destroy.
+The default run hashes the artifact and prints a plan. Package validity is a
+separate result: it passes only when dpkg-deb returns usable control, and it
+stays unverified when dpkg-deb is missing. The plan does not install, purge,
+or change services. --execute also requires --disposable-environment LABEL
+and is only for a Linux host the operator can destroy.
 
 scripts/package_unified_installer.py remains the package builder. This
 checklist never edits the native acceptance matrix. A fake command runner is
@@ -27,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 ALLOWED_PACKAGES = ("webcodex", "webcodex-runtime")
+CONFLICT_PACKAGES = {"webcodex": "webcodex-runtime", "webcodex-runtime": "webcodex"}
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 UNIT_RE = re.compile(r"^(webcodex[A-Za-z0-9@._-]*\.service)\s+(\S+)")
 DPKG_MUTATIONS = {"-i", "--install", "--purge", "-P", "-r", "--remove"}
@@ -42,7 +45,9 @@ RUNTIME_PATHS = (
 DESKTOP_PATH = "/usr/lib/webcodex/webcodex-desktop"
 STEP_IDS = (
     "artifact",
+    "package_metadata",
     "preexisting_units",
+    "preexisting_package",
     "install",
     "binaries",
     "runner_prereqs",
@@ -188,22 +193,99 @@ def matrix_target(host: dict[str, Any]) -> str | None:
     return None
 
 
-def version_key(value: str) -> tuple[int, ...] | None:
-    main = value.split("+", 1)[0].split("-", 1)[0]
-    if not main:
+_UPSTREAM_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.+-~")
+_REVISION_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.+~")
+
+
+def _version_order(char: str) -> int:
+    """deb-version(7) order: tilde, then end-of-string, then letters, then other."""
+    if not char or char.isdigit():
+        return 0
+    if char == "~":
+        return -1
+    if char.isalpha():
+        return ord(char)
+    return ord(char) + 256
+
+
+def _verrevcmp(left: str, right: str) -> int:
+    ia = ib = 0
+    while ia < len(left) or ib < len(right):
+        while (ia < len(left) and not left[ia].isdigit()) or (ib < len(right) and not right[ib].isdigit()):
+            ac = _version_order(left[ia] if ia < len(left) else "")
+            bc = _version_order(right[ib] if ib < len(right) else "")
+            if ac != bc:
+                return 1 if ac > bc else -1
+            if ia < len(left):
+                ia += 1
+            if ib < len(right):
+                ib += 1
+        while ia < len(left) and left[ia] == "0":
+            ia += 1
+        while ib < len(right) and right[ib] == "0":
+            ib += 1
+        first = 0
+        while ia < len(left) and left[ia].isdigit() and ib < len(right) and right[ib].isdigit():
+            if first == 0:
+                first = ord(left[ia]) - ord(right[ib])
+            ia += 1
+            ib += 1
+        if ia < len(left) and left[ia].isdigit():
+            return 1
+        if ib < len(right) and right[ib].isdigit():
+            return -1
+        if first:
+            return 1 if first > 0 else -1
+    return 0
+
+
+def split_debian_version(value: str) -> tuple[int, str, str] | None:
+    """Split [epoch:]upstream[-revision] the way dpkg does, or reject an illegal version."""
+    if not value or any(char.isspace() for char in value):
         return None
-    parts: list[int] = []
-    for piece in main.split("."):
-        if not piece.isdigit():
+    epoch = 0
+    rest = value
+    if ":" in value:
+        head, rest = value.split(":", 1)
+        if not head.isdigit():
             return None
-        parts.append(int(piece))
-    return tuple(parts)
+        epoch = int(head)
+    if not rest or ":" in rest:
+        return None
+    if "-" in rest:
+        upstream, revision = rest.rsplit("-", 1)
+    else:
+        upstream, revision = rest, ""
+    if not upstream or not upstream[0].isdigit():
+        return None
+    if any(char not in _UPSTREAM_CHARS for char in upstream):
+        return None
+    if any(char not in _REVISION_CHARS for char in revision):
+        return None
+    return epoch, upstream, revision
+
+
+def dpkg_version_relation(left: str, right: str) -> int | None:
+    """Compare versions with `dpkg --compare-versions` semantics.
+
+    Returns -1, 0, or 1. Returns None when either version is illegal, so a
+    caller cannot treat an uncomparable pair as an upgrade.
+    """
+    parsed_left = split_debian_version(left)
+    parsed_right = split_debian_version(right)
+    if parsed_left is None or parsed_right is None:
+        return None
+    if parsed_left[0] != parsed_right[0]:
+        return 1 if parsed_left[0] > parsed_right[0] else -1
+    relation = _verrevcmp(parsed_left[1], parsed_right[1])
+    if relation == 0:
+        relation = _verrevcmp(parsed_left[2], parsed_right[2])
+    return relation
 
 
 def is_newer(candidate: str, previous: str) -> bool:
-    new = version_key(candidate)
-    old = version_key(previous)
-    return new is not None and old is not None and new > old
+    """True only when `dpkg --compare-versions candidate gt previous` is true."""
+    return dpkg_version_relation(candidate, previous) == 1
 
 
 def container_signals(read_text, environ: dict[str, str], exists) -> bool:
@@ -457,6 +539,100 @@ def probe_units(builder: ReportBuilder, runner: Any, timeout: float, step_id: st
     return found
 
 
+def dpkg_deb_missing(result: CommandResult) -> bool:
+    if result.exit_code in (0, None):
+        return False
+    if result.exit_code == 127:
+        return True
+    text = f"{result.stderr}\n{result.stdout}".casefold()
+    return "command not found" in text
+
+
+def load_metadata(builder: ReportBuilder, runner: Any, timeout: float, path: Path, *, missing_is_untested: bool) -> dict[str, str] | None:
+    """Record package validity separately from the artifact hash."""
+    argv = ["dpkg-deb", "-f", str(path)]
+    try:
+        result = runner.run(argv, float(timeout))
+    except KeyboardInterrupt:
+        builder.interrupt("package_metadata")
+        return None
+    except AcceptanceError as exc:
+        builder.fail("package_metadata", str(exc), evidence={"package_validated": False})
+        return None
+    if not isinstance(result, CommandResult):
+        builder.fail("package_metadata", "command runner returned no result", evidence={"package_validated": False})
+        return None
+    if result.timed_out or result.exit_code is None:
+        detail = clip(result.stderr or result.stdout or "still running", 200)
+        builder.fail("package_metadata", f"timed out: {detail}", evidence={"package_validated": False, "stdout": result.stdout, "stderr": result.stderr})
+        return None
+    if dpkg_deb_missing(result):
+        evidence = {"package_validated": False, "stderr": result.stderr}
+        reason = "dpkg-deb is unavailable; package metadata was not verified"
+        if missing_is_untested:
+            builder.put("package_metadata", "UNTESTED", exit_code=result.exit_code, reason=reason, evidence=evidence)
+        else:
+            builder.fail("package_metadata", reason, exit_code=result.exit_code, evidence=evidence)
+        return None
+    if result.exit_code != 0:
+        builder.fail(
+            "package_metadata",
+            clip(result.stderr or result.stdout or "dpkg-deb failed"),
+            exit_code=result.exit_code,
+            evidence={"package_validated": False, "stdout": result.stdout, "stderr": result.stderr},
+        )
+        return None
+    fields = parse_control(result.stdout)
+    package = fields.get("package", "")
+    if package not in ALLOWED_PACKAGES or not fields.get("version") or not fields.get("architecture"):
+        builder.fail(
+            "package_metadata",
+            f"unsupported or incomplete package control for {package or 'unknown'}",
+            exit_code=result.exit_code,
+            evidence={"package_validated": False, "stdout": result.stdout},
+        )
+        return None
+    builder.put(
+        "package_metadata",
+        "PASS",
+        exit_code=0,
+        evidence={
+            "package": package,
+            "version": fields["version"],
+            "architecture": fields["architecture"],
+            "package_validated": True,
+        },
+    )
+    return fields
+
+
+def guard_existing_install(builder: ReportBuilder, runner: Any, timeout: float, package: str) -> bool:
+    """Refuse a normal lifecycle that would overwrite and then purge an existing install."""
+    names = (package, CONFLICT_PACKAGES[package])
+    for name in names:
+        result = run_command(builder, runner, timeout, "preexisting_package", ["dpkg-query", "-W", name])
+        if builder.stopped or result is None:
+            return False
+        if result.exit_code == 0:
+            builder.fail(
+                "preexisting_package",
+                f"{name} is already installed; refusing to overwrite and purge an existing installation",
+                exit_code=result.exit_code,
+                evidence={"package": name, "stdout": result.stdout},
+            )
+            return False
+        if result.exit_code != 1:
+            builder.fail(
+                "preexisting_package",
+                clip(result.stderr or result.stdout or f"dpkg-query failed with exit {result.exit_code}"),
+                exit_code=result.exit_code,
+                evidence={"package": name, "stdout": result.stdout, "stderr": result.stderr},
+            )
+            return False
+    builder.put("preexisting_package", "PASS", evidence={"absent": list(names)})
+    return True
+
+
 def read_deb(builder: ReportBuilder, runner: Any, timeout: float, path: Path) -> dict[str, str] | None:
     result = run_command(builder, runner, timeout, "install", ["dpkg-deb", "-f", str(path)])
     if builder.stopped or result is None:
@@ -639,19 +815,10 @@ def run_plan(config: AcceptanceConfig, runner: Any, builder: ReportBuilder) -> N
     if deb is None or not deb.is_file():
         builder.fail("artifact", "deb not found")
         return
-    evidence: dict[str, Any] = {"sha256": sha256_file(deb), "bytes": deb.stat().st_size}
-    try:
-        result = runner.run(["dpkg-deb", "-f", str(deb)], float(config.timeout_seconds))
-    except KeyboardInterrupt:
-        builder.interrupt("artifact")
+    builder.put("artifact", "PASS", evidence={"sha256": sha256_file(deb), "bytes": deb.stat().st_size})
+    load_metadata(builder, runner, config.timeout_seconds, deb, missing_is_untested=True)
+    if builder.stopped:
         return
-    except AcceptanceError as exc:
-        builder.fail("artifact", str(exc))
-        return
-    if isinstance(result, CommandResult) and result.exit_code == 0 and not result.timed_out:
-        fields = parse_control(result.stdout)
-        evidence.update({key: fields.get(key) for key in ("package", "version", "architecture")})
-    builder.put("artifact", "PASS", evidence=evidence)
     if config.previous_deb is not None:
         builder.put("upgrade", "NOT_RUN", reason="previous package supplied but execute was not requested")
 
@@ -675,7 +842,7 @@ def run_execute(config: AcceptanceConfig, runner: Any, view: Any, builder: Repor
         builder.fail("artifact", "deb not found")
         return
     builder.put("artifact", "PASS", evidence={"sha256": sha256_file(deb), "bytes": deb.stat().st_size})
-    current = read_deb(builder, runner, config.timeout_seconds, deb)
+    current = load_metadata(builder, runner, config.timeout_seconds, deb, missing_is_untested=False)
     if current is None:
         return
     evidence = dict(builder.steps["artifact"]["evidence"])
@@ -706,6 +873,8 @@ def run_execute(config: AcceptanceConfig, runner: Any, view: Any, builder: Repor
             builder.fail("install", f"package architecture {fields.get('architecture')} does not match host architecture {host_arch}", evidence={"artifact": label})
             return
     package = current["package"]
+    if not guard_existing_install(builder, runner, config.timeout_seconds, package):
+        return
     if previous is not None and config.previous_deb is not None:
         if install_deb(builder, runner, config.timeout_seconds, config.previous_deb, "install") is None:
             return

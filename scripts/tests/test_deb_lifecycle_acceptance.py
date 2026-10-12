@@ -23,6 +23,7 @@ from scripts.deb_lifecycle_acceptance import (
     acceptance,
     candidate_flags,
     container_signals,
+    is_newer,
     main,
 )
 
@@ -200,6 +201,8 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
                     return ok("amd64\n")
                 if argv[0] == "systemctl":
                     return ok("")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    return CommandResult(exit_code=1, stdout="", stderr="no package")
                 if argv[:2] == ["dpkg", "-i"]:
                     return CommandResult(exit_code=2, stdout="", stderr="dependency problem")
                 raise AssertionError(argv)
@@ -233,6 +236,8 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
                     return ok("amd64\n")
                 if argv[0] == "systemctl":
                     return ok("")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    return CommandResult(exit_code=1, stdout="", stderr="no package")
                 if argv[:2] == ["dpkg", "-i"]:
                     return CommandResult(exit_code=None, stdout="", stderr="still running", timed_out=True)
                 raise AssertionError(argv)
@@ -260,6 +265,8 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
                     return ok(deb_control())
                 if argv[:2] == ["dpkg", "--print-architecture"]:
                     return ok("amd64\n")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    return CommandResult(exit_code=1, stdout="", stderr="")
                 if argv[0] == "systemctl":
                     return ok("")
                 return ok("")
@@ -540,15 +547,20 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
             root = Path(temp)
             view = installed_view()
 
+            purged = {"done": False}
+
             def respond(argv, timeout):
                 if argv[:2] == ["dpkg-deb", "-f"]:
                     return ok(deb_control())
                 if argv[:2] == ["dpkg", "--print-architecture"]:
                     return ok("amd64\n")
                 if argv[:2] == ["dpkg", "--purge"]:
+                    purged["done"] = True
                     view.present.clear()
                     return ok("")
                 if argv[:2] == ["dpkg-query", "-W"]:
+                    if not purged["done"]:
+                        return CommandResult(exit_code=1, stdout="", stderr="")
                     return CommandResult(exit_code=2, stdout="", stderr="database locked")
                 return ok("")
 
@@ -609,6 +621,8 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
                     return ok("webcodex-server.service disabled\n")
                 if argv[:3] == ["systemctl", "--user", "list-unit-files"]:
                     return ok("")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    return CommandResult(exit_code=1, stdout="", stderr="")
                 if argv[:2] == ["dpkg", "-i"]:
                     return ok("")
                 if "is-active" in argv:
@@ -644,6 +658,8 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
                     return ok("webcodex-server.service disabled\n")
                 if argv[:3] == ["systemctl", "--user", "list-unit-files"]:
                     return ok("")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    return CommandResult(exit_code=1, stdout="", stderr="")
                 if argv[:2] == ["dpkg", "-i"]:
                     return ok("")
                 if "is-active" in argv:
@@ -730,6 +746,321 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
 
     def test_timeout_must_be_finite(self):
         self.assertEqual(main(["--timeout", "nan", "missing.deb"]), 1)
+
+    def test_dpkg_compare_versions_honors_revision_epoch_and_tilde(self):
+        cases = (
+            ("1.0-2", "1.0-1", True),
+            ("1.0-2ubuntu1", "1.0-2", True),
+            ("1:1.0-1", "2.0-1", True),
+            ("1:1.0-2", "1:1.0-1", True),
+            ("10:0.1", "2:9.0", True),
+            ("1.0-1", "1.0", True),
+            ("1.0-1", "1.0~rc1-1", True),
+            ("1.0+b1", "1.0", True),
+            ("1.0a-1", "1.0-1", True),
+            ("0.5.1", "0.5.0", True),
+            ("1.0~rc1-1", "1.0-1", False),
+            ("1.0-1", "1.0-2", False),
+            ("2.0-1", "1:1.0-1", False),
+            ("1.0", "1.0-0", False),
+            ("1.0-0", "1.0", False),
+            ("0:1.0-1", "1.0-1", False),
+            ("1.0-1", "0:1.0-1", False),
+            ("0.5.1", "0.5.1", False),
+            ("abc", "1.0", False),
+            ("1.0", "", False),
+        )
+        for candidate, previous, expected in cases:
+            with self.subTest(candidate=candidate, previous=previous):
+                self.assertEqual(is_newer(candidate, previous), expected)
+
+    def test_revision_and_epoch_upgrades_install_only_when_newer(self):
+        pairs = (("1.0-1", "1.0-2"), ("2.0-1", "1:1.0-1"))
+        for previous_version, candidate_version in pairs:
+            with self.subTest(previous=previous_version, candidate=candidate_version):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    previous = root / "previous.deb"
+                    previous.write_bytes(b"old-deb")
+                    seen: list[str] = []
+
+                    def respond(argv, timeout, previous_version=previous_version, candidate_version=candidate_version):
+                        if argv[:2] == ["dpkg-deb", "-f"]:
+                            version = previous_version if argv[2].endswith("previous.deb") else candidate_version
+                            return ok(deb_control(version=version))
+                        if argv[:2] == ["dpkg", "--print-architecture"]:
+                            return ok("amd64\n")
+                        if argv[:2] == ["dpkg", "-i"]:
+                            seen.append(Path(argv[2]).name)
+                            return ok("")
+                        if argv[0] == "systemctl":
+                            return ok("")
+                        if argv[:2] == ["dpkg", "--purge"]:
+                            view.present.clear()
+                            return ok("")
+                        if argv[:2] == ["dpkg-query", "-W"]:
+                            return CommandResult(exit_code=1, stdout="", stderr="")
+                        return ok("")
+
+                    view = installed_view()
+                    report, code = acceptance(
+                        config(root, previous_deb=previous, execute=True, disposable_environment="vm-debian-12"),
+                        ScriptedRunner(respond),
+                        view,
+                    )
+
+                self.assertEqual(code, 0, json.dumps(report, indent=2))
+                self.assertEqual(seen, ["previous.deb", "webcodex-runtime.deb"])
+                upgrade = next(step for step in report["steps"] if step["id"] == "upgrade")
+                self.assertEqual(upgrade["status"], "PASS")
+                self.assertFalse(report["matrix_updated"])
+                self.assertFalse(report["upgrade_acceptance_candidate"])
+
+    def test_plan_invalid_deb_is_not_reported_as_validated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def respond(argv, timeout):
+                if argv[:2] == ["dpkg-deb", "-f"]:
+                    return CommandResult(exit_code=2, stdout="", stderr="not a debian format archive")
+                raise AssertionError(argv)
+
+            report, code = acceptance(config(root), ScriptedRunner(respond), installed_view())
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        self.assertFalse(report["executed"])
+        self.assertFalse(report["matrix_updated"])
+        steps = {step["id"]: step for step in report["steps"]}
+        self.assertEqual(steps["artifact"]["status"], "PASS")
+        self.assertEqual(steps["artifact"]["evidence"]["sha256"], hashlib.sha256(b"fake-deb").hexdigest())
+        self.assertNotEqual(steps["artifact"]["evidence"].get("package_validated"), True)
+        self.assertIn("package_metadata", steps)
+        self.assertEqual(steps["package_metadata"]["status"], "FAIL")
+        self.assertNotEqual(steps["package_metadata"]["status"], "PASS")
+        self.assertFalse(steps["package_metadata"]["evidence"]["package_validated"])
+        self.assertIn("debian", steps["package_metadata"]["reason"])
+        self.assertEqual(steps["install"]["status"], "NOT_RUN")
+
+    def test_plan_without_dpkg_deb_leaves_metadata_unverified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def respond(argv, timeout):
+                if argv[:2] == ["dpkg-deb", "-f"]:
+                    return CommandResult(exit_code=127, stdout="", stderr="dpkg-deb: command not found")
+                raise AssertionError(argv)
+
+            report, code = acceptance(config(root), ScriptedRunner(respond), installed_view())
+
+        self.assertEqual(code, 0, json.dumps(report, indent=2))
+        self.assertFalse(report["executed"])
+        steps = {step["id"]: step for step in report["steps"]}
+        self.assertEqual(steps["artifact"]["status"], "PASS")
+        self.assertEqual(steps["artifact"]["evidence"]["sha256"], hashlib.sha256(b"fake-deb").hexdigest())
+        self.assertNotEqual(steps["artifact"]["evidence"].get("package_validated"), True)
+        self.assertIn("package_metadata", steps)
+        self.assertEqual(steps["package_metadata"]["status"], "UNTESTED")
+        self.assertNotEqual(steps["package_metadata"]["status"], "PASS")
+        self.assertFalse(steps["package_metadata"]["evidence"]["package_validated"])
+        self.assertIn("not verified", steps["package_metadata"]["reason"])
+        self.assertFalse(report["installer_acceptance_candidate"])
+
+    def test_plan_metadata_timeout_is_a_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def respond(argv, timeout):
+                if argv[:2] == ["dpkg-deb", "-f"]:
+                    return CommandResult(exit_code=None, stdout="", stderr="still running", timed_out=True)
+                raise AssertionError(argv)
+
+            report, code = acceptance(config(root), ScriptedRunner(respond), installed_view())
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        steps = {step["id"]: step for step in report["steps"]}
+        self.assertEqual(steps["artifact"]["status"], "PASS")
+        self.assertEqual(steps["package_metadata"]["status"], "FAIL")
+        self.assertNotEqual(steps["package_metadata"]["status"], "PASS")
+        self.assertIn("timed out", steps["package_metadata"]["reason"])
+        self.assertFalse(steps["package_metadata"]["evidence"]["package_validated"])
+
+    def test_plan_unusable_control_is_not_validated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def respond(argv, timeout):
+                if argv[:2] == ["dpkg-deb", "-f"]:
+                    return ok("Description: not a package\n")
+                raise AssertionError(argv)
+
+            report, code = acceptance(config(root), ScriptedRunner(respond), installed_view())
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        steps = {step["id"]: step for step in report["steps"]}
+        self.assertEqual(steps["artifact"]["status"], "PASS")
+        self.assertEqual(steps["package_metadata"]["status"], "FAIL")
+        self.assertFalse(steps["package_metadata"]["evidence"]["package_validated"])
+        self.assertNotEqual(steps["artifact"]["evidence"].get("package_validated"), True)
+
+    def test_plan_valid_metadata_stays_distinct_from_the_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report, code = acceptance(
+                config(root),
+                ScriptedRunner(lambda argv, timeout: ok(deb_control())),
+                installed_view(),
+            )
+
+        self.assertEqual(code, 0, json.dumps(report, indent=2))
+        self.assertFalse(report["executed"])
+        steps = {step["id"]: step for step in report["steps"]}
+        self.assertEqual(steps["artifact"]["status"], "PASS")
+        self.assertEqual(set(steps["artifact"]["evidence"]), {"sha256", "bytes"})
+        self.assertEqual(steps["package_metadata"]["status"], "PASS")
+        self.assertTrue(steps["package_metadata"]["evidence"]["package_validated"])
+        self.assertEqual(steps["package_metadata"]["evidence"]["version"], "0.5.1")
+        self.assertEqual(steps["package_metadata"]["evidence"]["package"], "webcodex-runtime")
+        self.assertFalse(report["matrix_updated"])
+
+    def _installed_package_report(self, queries):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            view = installed_view()
+            purged = {"done": False}
+
+            def respond(argv, timeout):
+                if argv[:2] == ["dpkg-deb", "-f"]:
+                    return ok(deb_control())
+                if argv[:2] == ["dpkg", "--print-architecture"]:
+                    return ok("amd64\n")
+                if argv[0] == "systemctl":
+                    return ok("")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    if purged["done"]:
+                        return CommandResult(exit_code=1, stdout="", stderr="")
+                    return queries(argv)
+                if argv[:2] == ["dpkg", "-i"]:
+                    return ok("")
+                if argv[:2] == ["dpkg", "--purge"]:
+                    purged["done"] = True
+                    view.present.clear()
+                    return ok("")
+                return ok("")
+
+            runner = ScriptedRunner(respond)
+            report, code = acceptance(
+                config(root, execute=True, disposable_environment="vm-debian-12"),
+                runner,
+                view,
+            )
+        return runner, report, code
+
+    def test_installed_target_package_is_not_overwritten_or_purged(self):
+        def queries(argv):
+            if argv[2] == "webcodex-runtime":
+                return CommandResult(exit_code=0, stdout="webcodex-runtime\t0.5.0\n", stderr="")
+            return CommandResult(exit_code=1, stdout="", stderr="")
+
+        runner, report, code = self._installed_package_report(queries)
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        self.assertFalse(any(argv[:2] == ["dpkg", "-i"] for argv in runner.calls))
+        self.assertFalse(any(argv[:2] == ["dpkg", "--purge"] for argv in runner.calls))
+        step = next(item for item in report["steps"] if item["id"] == "preexisting_package")
+        self.assertEqual(step["status"], "FAIL")
+        self.assertIn("already installed", step["reason"])
+        self.assertIn("webcodex-runtime", step["reason"])
+        self.assertEqual(report["matrix_updated"], False)
+        self.assertFalse(report["installer_acceptance_candidate"])
+
+    def test_installed_conflict_package_is_not_overwritten_or_purged(self):
+        def queries(argv):
+            if argv[2] == "webcodex":
+                return CommandResult(exit_code=0, stdout="webcodex\t0.5.0\n", stderr="")
+            return CommandResult(exit_code=1, stdout="", stderr="")
+
+        runner, report, code = self._installed_package_report(queries)
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        self.assertFalse(any(argv[:2] == ["dpkg", "-i"] for argv in runner.calls))
+        self.assertFalse(any(argv[:2] == ["dpkg", "--purge"] for argv in runner.calls))
+        step = next(item for item in report["steps"] if item["id"] == "preexisting_package")
+        self.assertEqual(step["status"], "FAIL")
+        self.assertEqual(step["evidence"]["package"], "webcodex")
+        self.assertIn("already installed", step["reason"])
+
+    def test_empty_installed_query_still_refuses_the_lifecycle(self):
+        def queries(argv):
+            if argv[2] == "webcodex-runtime":
+                return CommandResult(exit_code=0, stdout="", stderr="")
+            return CommandResult(exit_code=1, stdout="", stderr="")
+
+        runner, report, code = self._installed_package_report(queries)
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        self.assertFalse(any(argv[:2] == ["dpkg", "-i"] for argv in runner.calls))
+        self.assertFalse(any(argv[:2] == ["dpkg", "--purge"] for argv in runner.calls))
+        step = next(item for item in report["steps"] if item["id"] == "preexisting_package")
+        self.assertEqual(step["status"], "FAIL")
+
+    def test_uncertain_preinstall_query_does_not_install_or_purge(self):
+        def queries(argv):
+            return CommandResult(exit_code=2, stdout="", stderr="database locked")
+
+        runner, report, code = self._installed_package_report(queries)
+
+        self.assertEqual(code, 2, json.dumps(report, indent=2))
+        self.assertFalse(any(argv[:2] == ["dpkg", "-i"] for argv in runner.calls))
+        self.assertFalse(any(argv[:2] == ["dpkg", "--purge"] for argv in runner.calls))
+        step = next(item for item in report["steps"] if item["id"] == "preexisting_package")
+        self.assertEqual(step["status"], "FAIL")
+        self.assertEqual(step["exit_code"], 2)
+
+    def test_uninstall_only_still_purges_an_already_installed_package(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            view = installed_view()
+            purged = {"done": False}
+
+            def respond(argv, timeout):
+                if argv[:2] == ["dpkg", "--print-architecture"]:
+                    return ok("amd64\n")
+                if argv[0] == "systemctl":
+                    return ok("")
+                if argv[:2] == ["dpkg-query", "-W"]:
+                    if not purged["done"]:
+                        return CommandResult(exit_code=0, stdout="webcodex-runtime\t0.5.0\n", stderr="")
+                    return CommandResult(exit_code=1, stdout="", stderr="")
+                if argv[:2] == ["dpkg", "--purge"]:
+                    purged["done"] = True
+                    view.present.clear()
+                    return ok("")
+                raise AssertionError(argv)
+
+            runner = ScriptedRunner(respond)
+            report, code = acceptance(
+                AcceptanceConfig(
+                    deb=None,
+                    previous_deb=None,
+                    execute=True,
+                    disposable_environment="vm-debian-12",
+                    exercise_existing_units=False,
+                    uninstall_only=True,
+                    package="webcodex-runtime",
+                    timeout_seconds=5,
+                ),
+                runner,
+                view,
+            )
+
+        self.assertEqual(code, 0, json.dumps(report, indent=2))
+        self.assertTrue(purged["done"])
+        self.assertIn(["dpkg", "--purge", "webcodex-runtime"], runner.calls)
+        self.assertFalse(any(argv[:2] == ["dpkg", "-i"] for argv in runner.calls))
+        steps = {step["id"]: step for step in report["steps"]}
+        self.assertEqual(steps["uninstall"]["status"], "PASS")
+        self.assertEqual(steps["residue"]["status"], "PASS")
+        self.assertNotEqual(steps["uninstall"]["status"], "FAIL")
 
 
 if __name__ == "__main__":
