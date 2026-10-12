@@ -145,6 +145,16 @@ test("a hidden card past the lease budget syncs once immediately and then waits 
   assert.equal(view.calls("sync_goal_plan").length, 2);
 });
 
+test("slow successful replies consume the hidden observation lease", async () => {
+  const view = await ready();
+  await view.fireTimers(12_000);
+  view.advanceTime(8_000);
+  await view.reply(view.calls("sync_goal_plan")[1], toolResult({ goal_plan: plan }));
+  await view.visibility(true);
+  // Server observation can precede reply delivery by the full response delay.
+  assert.equal([...view.timers.values()][0].delay, 57_000);
+});
+
 test("terminal Goal stops polling and late visibility changes cannot restart it", async () => {
   const view = await ready();
   await view.fireTimers(12000);

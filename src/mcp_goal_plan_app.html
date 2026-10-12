@@ -404,7 +404,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   // counts against that budget.
   function hiddenPollDelay() {
     if (lastSuccessfulObservationAt === null) return HIDDEN_POLL_MS;
-    const elapsed = Date.now() - lastSuccessfulObservationAt;
+    const elapsed = performance.now() - lastSuccessfulObservationAt;
     const remaining = OBSERVATION_LEASE_MS - CALL_TIMEOUT_MS - elapsed;
     if (remaining <= 0) return 0;
     return Math.min(HIDDEN_POLL_MS, remaining);
@@ -442,6 +442,9 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   async function poll() {
     if (tornDown || !hostInitialized || !goalId || isTerminal() || pollInFlight) return;
     pollInFlight = true;
+    // The server renews its lease before delivering the response. Use the
+    // request start as a conservative lower bound and a monotonic local clock.
+    const observationStartedAt = performance.now();
     try {
       // One effectful App primitive owns observation, authoritative stall
       // reconciliation, and the final projection. No conditional second RPC.
@@ -454,7 +457,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
       lastRevision = plan.revision;
       lastLifecycle = plan.lifecycle;
       lastPlan = plan;
-      lastSuccessfulObservationAt = Date.now();
+      lastSuccessfulObservationAt = observationStartedAt;
       render(plan);
     } catch (_) {
       if (!tornDown) el("status").textContent = "State refresh pending";
