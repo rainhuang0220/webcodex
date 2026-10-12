@@ -375,6 +375,54 @@ test('private identity and segment metadata survive Host wrappers and normalized
   }
 });
 
+test('a canonical host projection does not mask the private spreadsheet envelope', async () => {
+  const view = reader({ manual: true });
+  await view.initialize();
+  const full = result('projected');
+  view.present({
+    structuredContent: { success: true, output: { name: 'data.csv' } },
+    _meta: full._meta,
+  });
+  await flush();
+  assert.equal(view.chunks().length, 1);
+  assert.equal(view.chunks()[0].params.arguments.path, 'projected.csv');
+  assert.equal(view.chunks()[0].params.arguments.bytes, full._meta['webcodex/spreadsheetSource'].output.bytes);
+  assert.equal(view.chunks()[0].params.arguments.sha256, full._meta['webcodex/spreadsheetSource'].output.sha256);
+  assert.doesNotMatch(view.nodes.status.textContent, /Invalid|did not deliver/);
+  await view.teardown();
+});
+
+test('a non-canonical host structuredContent does not mask the private spreadsheet envelope', async () => {
+  const view = reader({ manual: true });
+  await view.initialize();
+  const full = result('masked');
+  view.present({ structuredContent: { projected: true }, _meta: full._meta });
+  await flush();
+  assert.equal(view.chunks().length, 1);
+  assert.equal(view.chunks()[0].params.arguments.path, 'masked.csv');
+  assert.equal(view.chunks()[0].params.arguments.sha256, full._meta['webcodex/spreadsheetSource'].output.sha256);
+  assert.doesNotMatch(view.nodes.status.textContent, /did not deliver|Invalid/);
+  await view.teardown();
+});
+
+test('a host structuredContent projection does not mask the artifact chunk text envelope', async () => {
+  const view = reader({ manual: true });
+  await view.initialize();
+  view.present(result('chunk'));
+  await flush();
+  const request = view.chunks()[0];
+  const chunk = segment(request, bytes);
+  const canonical = { success: true, output: { artifact_chunk: chunk.page } };
+  await view.reply(request, {
+    structuredContent: { success: true, output: { artifact_chunk: { ...chunk.page, byte_offset: 1 } } },
+    content: [{ type: 'text', text: JSON.stringify(canonical) }],
+    _meta: { 'webcodex/artifactChunk': { content_base64: chunk.encoded } },
+  });
+  assert.equal(view.workers.length, 1);
+  assert.doesNotMatch(view.nodes.status.textContent, /complete spreadsheet|did not deliver|Unable to open/);
+  await view.teardown();
+});
+
 test('paged reads preserve 5 MiB across slow Host round trips with a text-only envelope', async () => {
   const view = reader({ textOnly: true, stepMs: 15000 }); await view.initialize();
   const payload = Buffer.alloc(5 * 1024 * 1024);
