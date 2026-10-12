@@ -60,13 +60,20 @@
   // Prefer the Server text copy, then the private Server copy, and accept a
   // Host projection only when it is still a canonical success/output envelope.
   function envelope(result, privateKey) {
-    for (const candidate of [result, result?.result, result?.toolResult, result?.tool_result]) {
-      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const candidates = [result, result?.result, result?.toolResult, result?.tool_result]
+      .filter(candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate));
+    // Apply source precedence across every supported wrapper, not just inside
+    // one wrapper: an outer Host projection must not mask a nested Server error.
+    for (const candidate of candidates) {
       if (canonicalEnvelope(candidate)) return candidate;
       const text = textEnvelope(candidate);
       if (text) return text;
+    }
+    for (const candidate of candidates) {
       const privateResult = privateKey && privateMetadata(candidate, privateKey);
       if (canonicalEnvelope(privateResult)) return privateResult;
+    }
+    for (const candidate of candidates) {
       const structured = candidate.structuredContent ?? candidate.structured_content;
       if (canonicalEnvelope(structured)) return structured;
     }

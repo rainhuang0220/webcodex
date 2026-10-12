@@ -423,6 +423,40 @@ test('a host structuredContent projection does not mask the artifact chunk text 
   await view.teardown();
 });
 
+test('outer Host projections cannot mask a nested server chunk envelope', async () => {
+  for (const key of ['result', 'toolResult', 'tool_result']) {
+    const view = reader({ manual: true });
+    await view.initialize();
+    view.present(result('nested'));
+    await flush();
+    const request = view.chunks()[0];
+    const chunk = segment(request, bytes);
+    await view.reply(request, {
+      structuredContent: { success: true, output: { artifact_chunk: { ...chunk.page, byte_offset: 1 } } },
+      [key]: segmentEnvelope(chunk, true),
+    });
+    assert.equal(view.workers.length, 1, key);
+    await view.teardown();
+  }
+});
+
+test('a nested server failure takes precedence over a successful Host projection', async () => {
+  const view = reader({ manual: true });
+  await view.initialize();
+  view.present(result('failure'));
+  await flush();
+  const request = view.chunks()[0];
+  const chunk = segment(request, bytes);
+  await view.reply(request, {
+    structuredContent: { success: true, output: { artifact_chunk: chunk.page } },
+    _meta: { 'webcodex/artifactChunk': { content_base64: chunk.encoded } },
+    toolResult: { content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Server rejected this snapshot' }) }] },
+  });
+  assert.equal(view.workers.length, 0);
+  assert.match(view.nodes.status.textContent, /Server rejected this snapshot/);
+  await view.teardown();
+});
+
 test('paged reads preserve 5 MiB across slow Host round trips with a text-only envelope', async () => {
   const view = reader({ textOnly: true, stepMs: 15000 }); await view.initialize();
   const payload = Buffer.alloc(5 * 1024 * 1024);
