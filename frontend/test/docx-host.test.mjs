@@ -117,6 +117,30 @@ test("a canonical host projection does not mask the private DOCX envelope", () =
   assert.doesNotMatch(view.nodes.status.textContent, /unavailable/);
 });
 
+for (const key of ["result", "toolResult", "tool_result"]) {
+  test(`nested ${key} server text outranks outer canonical DOCX projection`, () => {
+    const view = reader();
+    const error = view.present({
+      structuredContent: { success: true, output: { name: "short.docx" } },
+      [key]: { content: [{ type: "text", text: JSON.stringify(full) }] },
+    });
+    assert.equal(error, null);
+    assert.equal(view.chunks().length, 1);
+    assert.equal(view.chunks()[0].params.arguments.path, docxDocument.path);
+  });
+}
+
+test("nested DOCX server failure outranks outer Host success", () => {
+  const view = reader();
+  const error = view.present({
+    structuredContent: full,
+    toolResult: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "read denied" }) }] },
+  });
+  assert.equal(error, null);
+  assert.equal(view.chunks().length, 0);
+  assert.match(view.nodes.status.textContent, /unavailable/);
+});
+
 test("server text wins when a host projection drops the DOCX chunk offset", async () => {
   const view = reader();
   const error = view.present({ _meta: { "webcodex/docxDocument": full } });

@@ -50,14 +50,20 @@ function textEnvelope(candidate) {
 // Hosts can replace structuredContent. Prefer the Server text copy, then the
 // private Server copy, and accept a Host projection only when it is still canonical.
 function envelope(result) {
-  const candidates = [result, result?.result, result?.toolResult, result?.tool_result];
+  const candidates = [result, result?.result, result?.toolResult, result?.tool_result]
+    .filter(candidate => candidate && typeof candidate === "object" && !Array.isArray(candidate));
+  // Check all Server envelopes before any Host structuredContent projection,
+  // including when the Host nests the original result in another field.
   for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
     if (canonicalEnvelope(candidate)) return candidate;
     const text = textEnvelope(candidate);
     if (text) return text;
+  }
+  for (const candidate of candidates) {
     const privateResult = candidate._meta?.["webcodex/pdfDocument"] ?? candidate.meta?.["webcodex/pdfDocument"];
     if (canonicalEnvelope(privateResult)) return privateResult;
+  }
+  for (const candidate of candidates) {
     const structured = candidate.structuredContent ?? candidate.structured_content;
     if (canonicalEnvelope(structured)) return structured;
   }

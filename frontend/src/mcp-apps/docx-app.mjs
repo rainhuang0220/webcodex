@@ -45,13 +45,18 @@ export function mountDocxApp(win = window, doc = document) {
   // Hosts can replace structuredContent. Prefer the Server text copy, then the
   // private Server copy, and accept a Host projection only when it is still canonical.
   function envelope(result, privateKey) {
-    for (const candidate of [result, result?.result, result?.toolResult, result?.tool_result]) {
-      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const candidates = [result, result?.result, result?.toolResult, result?.tool_result]
+      .filter(candidate => candidate && typeof candidate === "object" && !Array.isArray(candidate));
+    // Check all Server envelopes before any Host structuredContent projection,
+    // including when the Host nests the original result in another field.
+    for (const candidate of candidates) {
       if (canonicalEnvelope(candidate)) return candidate;
       const text = textEnvelope(candidate);
       if (text) return text;
-      const privateResult = privateKey && privateMetadata(candidate, privateKey);
-      if (canonicalEnvelope(privateResult)) return privateResult;
+    }
+    const privateResult = privateKey && privateMetadata(result, privateKey);
+    if (canonicalEnvelope(privateResult)) return privateResult;
+    for (const candidate of candidates) {
       const structured = candidate.structuredContent ?? candidate.structured_content;
       if (canonicalEnvelope(structured)) return structured;
     }
