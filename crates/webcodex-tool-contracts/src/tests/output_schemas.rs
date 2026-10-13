@@ -353,6 +353,22 @@ fn observation_schemas_do_not_repeat_static_continuation_semantics() {
         .iter()
         .find(|variant| variant["properties"].get("suggested_call").is_some())
         .expect("observe_jobs full batch output");
+    // Both the full batch and model-facing sparse batch have closed wait
+    // objects, so newly emitted wait context must be described by both.
+    let wait_variants = variants
+        .iter()
+        .filter(|variant| variant["properties"].get("wait").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(wait_variants.len(), 2);
+    for variant in wait_variants {
+        let wait_properties = &variant["properties"]["wait"]["properties"];
+        for field in ["update_kind"] {
+            assert!(
+                wait_properties.get(field).is_some(),
+                "observe_jobs wait schema must advertise {field} in every projection"
+            );
+        }
+    }
     let item_output = &full["properties"]["items"]["items"]["properties"]["output"]["anyOf"][0];
     assert!(
         item_output["properties"]
@@ -1162,6 +1178,10 @@ fn observe_jobs_failure_item_schema_closes_recovery_metadata() {
         "error": null
     });
     validate(&result).unwrap();
+
+    let mut invalid_update_kind = result.clone();
+    invalid_update_kind["output"]["wait"]["update_kind"] = json!("not_an_update_kind");
+    assert!(validate(&invalid_update_kind).is_err());
 
     let mut duplicate_kind = result.clone();
     duplicate_kind["output"]["items"][0]["recovery_kind"] = json!("reobserve");
@@ -3035,7 +3055,7 @@ fn finish_coding_task_output_schema_describes_ledger_validation_summary() {
     assert_permission_summary_schema_fields(&output_props["permissions"]);
     assert_job_lifecycle_summary_schema_fields(&output_props["jobs"]);
     assert_review_evidence_schema_fields(&output_props["review_evidence"]);
-    let nested_show_changes = &output_props["changes"]["properties"]["show_changes"];
+    let nested_show_changes = &output_props["changes"]["properties"]["read_workspace_changes"];
     let nested_recovery =
         &nested_show_changes["properties"]["diff_review_handoff"]["properties"]["next_call"];
     assert_eq!(

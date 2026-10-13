@@ -173,6 +173,7 @@ async fn update_observed_job(
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity,
             finished,
         })
@@ -206,6 +207,7 @@ async fn update_sequenced_observed_job(
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -994,14 +996,38 @@ fn observe_jobs_canonical_and_compact_success_both_match_output_schema() {
         "immediate",
         0,
     );
-    let projected = compact_projection(&canonical);
     let schema = super::super::registry::output_schema_for_tool("observe_jobs");
-    for (label, result) in [("canonical", canonical), ("compact", projected)] {
-        let value = serde_json::to_value(&result).unwrap();
-        assert!(
-            super::super::startup_brief::validate_schema_instance_for_test(&value, &schema).is_ok(),
-            "{label} observe_jobs result did not satisfy output schema: {value}"
-        );
+    for kind in [
+        None,
+        Some("meaningful_change"),
+        Some("heartbeat"),
+        Some("change"),
+    ] {
+        let mut canonical = ToolResult::ok(canonical.output.clone());
+        if let Some(kind) = kind {
+            canonical.output["wait"]["outcome"] = json!("updated");
+            canonical.output["wait"]["update_kind"] = json!(kind);
+            canonical.output["changed_count"] = json!(1);
+            let observation = &mut canonical.output["items"][0]["output"];
+            observation["changed"] = json!(true);
+            observation["meaningful_changed"] = json!(kind == "meaningful_change");
+            observation["heartbeat_changed"] = json!(kind == "heartbeat");
+        }
+        let projected = compact_projection(&canonical);
+        for (label, result) in [("canonical", canonical), ("compact", projected)] {
+            assert_eq!(result.output["wait"]["update_kind"].as_str(), kind);
+            let mut value = serde_json::to_value(&result).unwrap();
+            assert!(
+                super::super::startup_brief::validate_schema_instance_for_test(&value, &schema)
+                    .is_ok(),
+                "{label} observe_jobs result did not satisfy output schema: {value}"
+            );
+            value["output"]["wait"]["update_kind"] = json!("invalid");
+            assert!(
+                super::super::startup_brief::validate_schema_instance_for_test(&value, &schema)
+                    .is_err()
+            );
+        }
     }
 }
 
@@ -1426,7 +1452,7 @@ async fn observe_jobs_missing_baseline_is_immediate_and_projects_activity_withou
             ToolCall::ObserveJobs {
                 items: vec![item(&job_id, None)],
                 tail_lines: 40,
-                wait_secs: Some(60),
+                wait_secs: Some(120),
                 wake_on: ObserveJobsWakeOn::Terminal,
 
                 summary_only: false,
@@ -1437,6 +1463,11 @@ async fn observe_jobs_missing_baseline_is_immediate_and_projects_activity_withou
     assert!(result.success, "{:?}", result.error);
     assert_eq!(result.output["wait"]["outcome"], "immediate");
     assert_eq!(result.output["wait"]["waited_ms"], 0);
+    // A normalized request must not be echoed as the original duration, and
+    // a baseline read has no triggering update to classify.
+    for field in ["requested_secs", "wake_on", "reason", "update_kind"] {
+        assert!(result.output["wait"].get(field).is_none(), "{field}");
+    }
     assert_eq!(result.output["items"][0]["output"]["status"], "running");
     assert_eq!(
         result.output["items"][0]["output"]["activity"],
@@ -1570,6 +1601,7 @@ async fn observe_jobs_one_item_update_wakes_shared_wait_and_refreshes_all_snapsh
     let result = task.await.unwrap();
     assert!(result.success, "{:?}", result.error);
     assert_eq!(result.output["wait"]["outcome"], "updated");
+    assert_eq!(result.output["wait"]["update_kind"], "meaningful_change");
     assert!(result.output["wait"]["waited_ms"].as_u64().unwrap() < 5_000);
     assert_eq!(result.output["items"][0]["output"]["status"], "running");
     assert_eq!(result.output["items"][1]["output"]["status"], "running");
@@ -1617,6 +1649,7 @@ async fn observe_jobs_meaningful_change_suppresses_heartbeat_then_change_reports
         .expect("meaningful output must wake promptly");
     assert!(result.success, "{:?}", result.error);
     assert_eq!(result.output["wait"]["outcome"], "updated");
+    assert_eq!(result.output["wait"]["update_kind"], "meaningful_change");
     let output = &result.output["items"][0]["output"];
     assert_eq!(output["changed"], true);
     assert_eq!(output["meaningful_changed"], true);
@@ -1639,6 +1672,7 @@ async fn observe_jobs_meaningful_change_suppresses_heartbeat_then_change_reports
         .expect("change policy must expose sequence-only liveness");
     assert!(result.success, "{:?}", result.error);
     assert_eq!(result.output["wait"]["outcome"], "updated");
+    assert_eq!(result.output["wait"]["update_kind"], "heartbeat");
     let output = &result.output["items"][0]["output"];
     assert_eq!(output["changed"], true);
     assert_eq!(output["meaningful_changed"], false);
@@ -1798,6 +1832,7 @@ async fn ordinary_receipts_production_sqlite_dual_restart_observe_and_list_filte
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })
@@ -1966,6 +2001,7 @@ async fn observe_jobs_terminal_policy_coalesces_noisy_jobs_with_one_deadline_and
                 validation_progress: None,
                 test_count_evidence: None,
                 format_mutation: None,
+                build_artifacts: None,
                 activity: Some(process_activity()),
                 finished: false,
             })
@@ -2328,6 +2364,7 @@ async fn observe_jobs_generic_failed_test_identity_survives_small_model_tail() {
                 validation_progress: None,
                 test_count_evidence: None,
                 format_mutation: None,
+                build_artifacts: None,
                 activity: None,
                 finished: true,
             })
