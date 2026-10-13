@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -342,14 +343,11 @@ def clip_output(text: str | None) -> str:
     return text[:OUTPUT_LIMIT] + "\n[truncated]"
 
 
-def kill_group(proc: subprocess.Popen) -> None:
+def kill_pgid(pgid: int) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        os.killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
-        try:
-            proc.kill()
-        except OSError:
-            pass
+        pass
 
 
 class _BoundedCapture:
@@ -397,21 +395,18 @@ def _drain(stream: Any, capture: _BoundedCapture) -> None:
             pass
 
 
-def _release(proc: subprocess.Popen, readers: list[threading.Thread], *, kill: bool) -> None:
-    """Kill when requested, then drain both pipes and reap the child."""
-    if kill and proc.poll() is None:
-        kill_group(proc)
-    for _ in range(2):
-        if proc.poll() is not None:
-            break
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            kill_group(proc)
-        except KeyboardInterrupt:
-            kill_group(proc)
+def _readers_finished(readers: list[threading.Thread], budget: float) -> bool:
+    if budget <= 0:
+        return all(not reader.is_alive() for reader in readers)
+    deadline = time.monotonic() + budget
     for reader in readers:
-        reader.join()
+        reader.join(max(0.0, deadline - time.monotonic()))
+        if reader.is_alive():
+            return False
+    return True
+
+
+def _close_streams(proc: subprocess.Popen) -> None:
     for stream in (proc.stdout, proc.stderr):
         if stream is None:
             continue
@@ -419,10 +414,34 @@ def _release(proc: subprocess.Popen, readers: list[threading.Thread], *, kill: b
             stream.close()
         except OSError:
             pass
+
+
+def _finish(proc: subprocess.Popen, readers: list[threading.Thread], pgid: int, *, kill: bool) -> None:
+    """Bounded cleanup. A kill reaches the owned group even after its leader has exited."""
+    if kill:
+        kill_pgid(pgid)
     if proc.poll() is None:
-        kill_group(proc)
         try:
-            proc.wait(timeout=2)
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            kill_pgid(pgid)
+    deadline = time.monotonic() + 1
+    for reader in readers:
+        try:
+            reader.join(max(0.0, deadline - time.monotonic()))
+        except KeyboardInterrupt:
+            kill_pgid(pgid)
+    if any(reader.is_alive() for reader in readers):
+        _close_streams(proc)
+        deadline = time.monotonic() + 1
+        for reader in readers:
+            reader.join(max(0.0, deadline - time.monotonic()))
+    else:
+        _close_streams(proc)
+    if proc.poll() is None:
+        kill_pgid(pgid)
+        try:
+            proc.wait(timeout=1)
         except (subprocess.TimeoutExpired, KeyboardInterrupt):
             pass
 
@@ -455,17 +474,26 @@ class SubprocessRunner:
         ]
         for reader in readers:
             reader.start()
+        try:
+            pgid = os.getpgid(proc.pid)
+        except OSError:
+            pgid = proc.pid
+        deadline = time.monotonic() + float(timeout)
         timed_out = False
         try:
             try:
-                proc.wait(timeout=float(timeout))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                proc.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
                 timed_out = True
-                _release(proc, readers, kill=True)
             else:
-                _release(proc, readers, kill=False)
+                if not _readers_finished(readers, deadline - time.monotonic()):
+                    timed_out = True
+            _finish(proc, readers, pgid, kill=timed_out)
         except BaseException:
-            _release(proc, readers, kill=True)
+            _finish(proc, readers, pgid, kill=True)
             raise
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()

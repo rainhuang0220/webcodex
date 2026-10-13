@@ -735,6 +735,90 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
         self.assertEqual(echo.exit_code, 0)
         self.assertEqual(echo.stdout, "eof")
 
+    def _pipe_holder_script(self, pidfile: Path, sleep_seconds: int) -> str:
+        return (
+            "import os, subprocess, sys\n"
+            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep({sleep_seconds})'])\n"
+            f"handle = open({str(pidfile)!r}, 'w')\n"
+            "handle.write('{} {}\\n'.format(os.getpid(), child.pid))\n"
+            "handle.close()\n"
+            "os._exit(0)\n"
+        )
+
+    def _descendant_pid(self, pidfile: Path) -> int:
+        _leader, child = pidfile.read_text().split()
+        return int(child)
+
+    def _assert_descendant_gone(self, pid: int) -> None:
+        deadline = time.monotonic() + 1
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+        self.fail(f"pipe-holding descendant {pid} was still running")
+
+    def test_subprocess_timeout_covers_pipe_holder_after_leader_exits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pidfile = Path(temp) / "pid"
+            started = time.monotonic()
+            result = SubprocessRunner(allow_mutation=False).run(
+                [sys.executable, "-c", self._pipe_holder_script(pidfile, 3)],
+                timeout=0.5,
+            )
+            elapsed = time.monotonic() - started
+            child = self._descendant_pid(pidfile)
+            self.assertTrue(result.timed_out, f"elapsed={elapsed:.3f} exit={result.exit_code}")
+            self.assertIsNone(result.exit_code)
+            self.assertLess(elapsed, 1.5)
+            self._assert_descendant_gone(child)
+
+    def test_subprocess_interrupt_kills_pipe_holder_after_leader_exits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pidfile = Path(temp) / "pid"
+            stop = threading.Event()
+
+            def raise_interrupt():
+                deadline = time.time() + 5
+                while time.time() < deadline and not stop.is_set():
+                    if pidfile.exists() and pidfile.stat().st_size > 0:
+                        time.sleep(0.3)
+                        if not stop.is_set():
+                            os.kill(os.getpid(), signal.SIGINT)
+                        return
+                    time.sleep(0.02)
+
+            previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+            poker = threading.Thread(target=raise_interrupt, daemon=True)
+            poker.start()
+            child = None
+            started = time.monotonic()
+            try:
+                with self.assertRaises(KeyboardInterrupt):
+                    SubprocessRunner(allow_mutation=False).run(
+                        [sys.executable, "-c", self._pipe_holder_script(pidfile, 5)],
+                        timeout=10,
+                    )
+                elapsed = time.monotonic() - started
+                self.assertLess(elapsed, 2.0)
+                child = self._descendant_pid(pidfile)
+                self._assert_descendant_gone(child)
+            finally:
+                stop.set()
+                signal.signal(signal.SIGINT, previous)
+                if child is not None:
+                    try:
+                        os.kill(child, 9)
+                    except OSError:
+                        pass
+
     def test_subprocess_interrupt_reaps_the_child_before_returning(self):
         with tempfile.TemporaryDirectory() as temp:
             pidfile = Path(temp) / "pid"
