@@ -9,13 +9,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import sys
 import tempfile
+import threading
 import time
+import tracemalloc
 import unittest
 from pathlib import Path
 
 from scripts.deb_lifecycle_acceptance import (
+    OUTPUT_LIMIT,
     AcceptanceConfig,
     AcceptanceError,
     CommandResult,
@@ -730,6 +734,121 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
             )
         self.assertEqual(echo.exit_code, 0)
         self.assertEqual(echo.stdout, "eof")
+
+    def test_subprocess_interrupt_reaps_the_child_before_returning(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pidfile = Path(temp) / "pid"
+            script = (
+                "import os, sys, time\n"
+                f"handle = open({str(pidfile)!r}, 'w')\n"
+                "handle.write(str(os.getpid()))\n"
+                "handle.flush()\n"
+                "chunk = 'x' * 65536\n"
+                "while True:\n"
+                "    sys.stdout.write(chunk)\n"
+                "    sys.stderr.write(chunk)\n"
+                "    sys.stdout.flush()\n"
+                "    sys.stderr.flush()\n"
+            )
+            stop = threading.Event()
+
+            def raise_interrupt():
+                deadline = time.time() + 5
+                while time.time() < deadline and not stop.is_set():
+                    if pidfile.exists() and pidfile.stat().st_size > 0:
+                        os.kill(os.getpid(), signal.SIGINT)
+                        return
+                    time.sleep(0.02)
+
+            previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+            poker = threading.Thread(target=raise_interrupt, daemon=True)
+            poker.start()
+            pid = None
+            try:
+                with self.assertRaises(KeyboardInterrupt):
+                    SubprocessRunner(allow_mutation=False).run([sys.executable, "-c", script], timeout=10)
+                self.assertGreater(pidfile.stat().st_size, 0)
+                pid = int(pidfile.read_text().strip())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+            finally:
+                stop.set()
+                signal.signal(signal.SIGINT, previous)
+                if pid is not None:
+                    try:
+                        os.kill(pid, 9)
+                    except OSError:
+                        pass
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except ChildProcessError:
+                        pass
+
+    def test_subprocess_bounds_stdout_and_stderr_while_draining(self):
+        size = 2 * 1024 * 1024
+        script = (
+            "import sys\n"
+            f"chunk = 'A' * 65536\n"
+            f"for _ in range({size} // 65536):\n"
+            "    sys.stdout.write(chunk)\n"
+            "sys.stdout.flush()\n"
+            "chunk = 'B' * 65536\n"
+            f"for _ in range({size} // 65536):\n"
+            "    sys.stderr.write(chunk)\n"
+            "sys.stderr.flush()\n"
+        )
+        tracemalloc.start()
+        try:
+            result = SubprocessRunner(allow_mutation=False).run([sys.executable, "-c", script], timeout=20)
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        marker = "\n[truncated]"
+        self.assertEqual(result.exit_code, 0)
+        self.assertFalse(result.timed_out)
+        self.assertLess(peak, 1024 * 1024)
+        for text, prefix in ((result.stdout, "A"), (result.stderr, "B")):
+            self.assertTrue(text.startswith(prefix))
+            self.assertTrue(text.endswith(marker))
+            self.assertEqual(len(text), OUTPUT_LIMIT + len(marker))
+
+        with tempfile.TemporaryDirectory() as temp:
+            pidfile = Path(temp) / "pid"
+            flooding = (
+                "import os, sys, time\n"
+                f"handle = open({str(pidfile)!r}, 'w')\n"
+                "handle.write(str(os.getpid()))\n"
+                "handle.close()\n"
+                "chunk = 'C' * 65536\n"
+                f"for _ in range({size} // 65536):\n"
+                "    sys.stdout.write(chunk)\n"
+                "    sys.stderr.write(chunk)\n"
+                "time.sleep(30)\n"
+            )
+            tracemalloc.start()
+            try:
+                timed = SubprocessRunner(allow_mutation=False).run([sys.executable, "-c", flooding], timeout=2)
+                _current, timed_peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            self.assertTrue(timed.timed_out)
+            self.assertIsNone(timed.exit_code)
+            self.assertLess(timed_peak, 1024 * 1024)
+            self.assertLessEqual(len(timed.stdout), OUTPUT_LIMIT + len(marker))
+            self.assertLessEqual(len(timed.stderr), OUTPUT_LIMIT + len(marker))
+            pid = int(pidfile.read_text().strip())
+            try:
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+            finally:
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except ChildProcessError:
+                    pass
 
     def test_subprocess_runner_drops_ambient_tokens(self):
         key = "WEBCODEX_TEST_TOKEN"

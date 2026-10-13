@@ -24,6 +24,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -351,6 +352,81 @@ def kill_group(proc: subprocess.Popen) -> None:
             pass
 
 
+class _BoundedCapture:
+    """Keep at most `limit` characters while a reader continues to drain."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self._parts: list[str] = []
+        self._kept = 0
+        self._truncated = False
+
+    def add(self, chunk: str) -> None:
+        if not chunk or self._kept >= self.limit:
+            if chunk:
+                self._truncated = True
+            return
+        room = self.limit - self._kept
+        self._parts.append(chunk[:room])
+        self._kept += min(len(chunk), room)
+        if len(chunk) > room:
+            self._truncated = True
+
+    def text(self) -> str:
+        body = "".join(self._parts)
+        if self._truncated:
+            return body + "\n[truncated]"
+        return body
+
+
+def _drain(stream: Any, capture: _BoundedCapture) -> None:
+    if stream is None:
+        return
+    try:
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                break
+            capture.add(chunk)
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _release(proc: subprocess.Popen, readers: list[threading.Thread], *, kill: bool) -> None:
+    """Kill when requested, then drain both pipes and reap the child."""
+    if kill and proc.poll() is None:
+        kill_group(proc)
+    for _ in range(2):
+        if proc.poll() is not None:
+            break
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            kill_group(proc)
+        except KeyboardInterrupt:
+            kill_group(proc)
+    for reader in readers:
+        reader.join()
+    for stream in (proc.stdout, proc.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
+    if proc.poll() is None:
+        kill_group(proc)
+        try:
+            proc.wait(timeout=2)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            pass
+
+
 class SubprocessRunner:
     def __init__(self, allow_mutation: bool = False):
         self.allow_mutation = allow_mutation
@@ -371,17 +447,31 @@ class SubprocessRunner:
             )
         except OSError as exc:
             return CommandResult(127, "", str(exc))
+        stdout_capture = _BoundedCapture(OUTPUT_LIMIT)
+        stderr_capture = _BoundedCapture(OUTPUT_LIMIT)
+        readers = [
+            threading.Thread(target=_drain, args=(proc.stdout, stdout_capture), daemon=True),
+            threading.Thread(target=_drain, args=(proc.stderr, stderr_capture), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        timed_out = False
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            kill_group(proc)
             try:
-                stdout, stderr = proc.communicate(timeout=5)
+                proc.wait(timeout=float(timeout))
             except subprocess.TimeoutExpired:
-                kill_group(proc)
-                return CommandResult(None, "", "still running", timed_out=True)
-            return CommandResult(None, clip_output(stdout), clip_output(stderr) or "still running", timed_out=True)
-        return CommandResult(proc.returncode, clip_output(stdout), clip_output(stderr))
+                timed_out = True
+                _release(proc, readers, kill=True)
+            else:
+                _release(proc, readers, kill=False)
+        except BaseException:
+            _release(proc, readers, kill=True)
+            raise
+        stdout = stdout_capture.text()
+        stderr = stderr_capture.text()
+        if timed_out:
+            return CommandResult(None, stdout, stderr or "still running", timed_out=True)
+        return CommandResult(proc.returncode, stdout, stderr)
 
 
 class LocalHostView:
