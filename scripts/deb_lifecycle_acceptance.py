@@ -16,15 +16,17 @@ supplied. Reboot persistence is always UNTESTED.
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
+import io
 import json
 import math
 import os
 import re
+import selectors
 import signal
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -377,32 +379,21 @@ class _BoundedCapture:
         return body
 
 
-def _drain(stream: Any, capture: _BoundedCapture) -> None:
-    if stream is None:
-        return
-    try:
-        while True:
-            chunk = stream.read(4096)
-            if not chunk:
-                break
-            capture.add(chunk)
-    except (OSError, ValueError):
-        pass
-    finally:
-        try:
-            stream.close()
-        except OSError:
-            pass
-
-
-def _readers_finished(readers: list[threading.Thread], budget: float) -> bool:
-    if budget <= 0:
-        return all(not reader.is_alive() for reader in readers)
-    deadline = time.monotonic() + budget
-    for reader in readers:
-        reader.join(max(0.0, deadline - time.monotonic()))
-        if reader.is_alive():
+def _drain_pipes(selector: selectors.BaseSelector, deadline: float) -> bool:
+    """Drain both nonblocking pipes under one deadline, retaining bounded text."""
+    while selector.get_map():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             return False
+        for key, _events in selector.select(remaining):
+            try:
+                chunk = os.read(key.fd, 4096)
+            except BlockingIOError:
+                continue
+            capture, decoder = key.data
+            capture.add(decoder.decode(chunk, final=not chunk))
+            if not chunk:
+                selector.unregister(key.fileobj)
     return True
 
 
@@ -416,34 +407,20 @@ def _close_streams(proc: subprocess.Popen) -> None:
             pass
 
 
-def _finish(proc: subprocess.Popen, readers: list[threading.Thread], pgid: int, *, kill: bool) -> None:
+def _finish(proc: subprocess.Popen, selector: selectors.BaseSelector, *, kill: bool) -> None:
     """Bounded cleanup. A kill reaches the owned group even after its leader has exited."""
     if kill:
-        kill_pgid(pgid)
-    if proc.poll() is None:
+        kill_pgid(proc.pid)
+    for _ in range(2):
         try:
             proc.wait(timeout=1)
+            break
         except (subprocess.TimeoutExpired, KeyboardInterrupt):
-            kill_pgid(pgid)
-    deadline = time.monotonic() + 1
-    for reader in readers:
-        try:
-            reader.join(max(0.0, deadline - time.monotonic()))
-        except KeyboardInterrupt:
-            kill_pgid(pgid)
-    if any(reader.is_alive() for reader in readers):
-        _close_streams(proc)
-        deadline = time.monotonic() + 1
-        for reader in readers:
-            reader.join(max(0.0, deadline - time.monotonic()))
-    else:
-        _close_streams(proc)
-    if proc.poll() is None:
-        kill_pgid(pgid)
-        try:
-            proc.wait(timeout=1)
-        except (subprocess.TimeoutExpired, KeyboardInterrupt):
-            pass
+            kill_pgid(proc.pid)
+    try:
+        _drain_pipes(selector, time.monotonic() + 1)
+    except KeyboardInterrupt:
+        kill_pgid(proc.pid)
 
 
 class SubprocessRunner:
@@ -453,48 +430,50 @@ class SubprocessRunner:
     def run(self, argv: list[str], timeout: float) -> CommandResult:
         if is_mutating(argv) and not self.allow_mutation:
             raise AcceptanceError("refusing mutating command without disposable authorization")
-        try:
-            proc = subprocess.Popen(
-                argv,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                errors="replace",
-                start_new_session=True,
-                env=scrubbed_env(),
-            )
-        except OSError as exc:
-            return CommandResult(127, "", str(exc))
         stdout_capture = _BoundedCapture(OUTPUT_LIMIT)
         stderr_capture = _BoundedCapture(OUTPUT_LIMIT)
-        readers = [
-            threading.Thread(target=_drain, args=(proc.stdout, stdout_capture), daemon=True),
-            threading.Thread(target=_drain, args=(proc.stderr, stderr_capture), daemon=True),
-        ]
-        for reader in readers:
-            reader.start()
-        try:
-            pgid = os.getpgid(proc.pid)
-        except OSError:
-            pgid = proc.pid
         deadline = time.monotonic() + float(timeout)
         timed_out = False
-        try:
+        with selectors.DefaultSelector() as selector:
             try:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise subprocess.TimeoutExpired(argv, timeout)
-                proc.wait(timeout=remaining)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-            else:
-                if not _readers_finished(readers, deadline - time.monotonic()):
-                    timed_out = True
-            _finish(proc, readers, pgid, kill=timed_out)
-        except BaseException:
-            _finish(proc, readers, pgid, kill=True)
-            raise
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    errors="replace",
+                    start_new_session=True,
+                    env=scrubbed_env(),
+                )
+            except OSError as exc:
+                return CommandResult(127, "", str(exc))
+            try:
+                for stream, capture in ((proc.stdout, stdout_capture), (proc.stderr, stderr_capture)):
+                    # Preserve Popen's text encoding/newline semantics, but never
+                    # block inside its buffered wrappers or share their locks.
+                    decoder = io.IncrementalNewlineDecoder(
+                        codecs.getincrementaldecoder(stream.encoding)(errors="replace"), translate=True,
+                    )
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, (capture, decoder))
+                timed_out = not _drain_pipes(selector, deadline)
+                if not timed_out:
+                    try:
+                        proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                _finish(proc, selector, kill=timed_out)
+            except BaseException:
+                _finish(proc, selector, kill=True)
+                raise
+            finally:
+                # A daemon may retain a pipe outside the owned process group.
+                # Flush partial text and close our ends without waiting for EOF.
+                for key in selector.get_map().values():
+                    capture, decoder = key.data
+                    capture.add(decoder.decode(b"", final=True))
+                _close_streams(proc)
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()
         if timed_out:

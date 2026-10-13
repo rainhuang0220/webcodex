@@ -1,7 +1,7 @@
 """Deterministic checks for the Debian/Ubuntu .deb lifecycle harness.
 
-These tests drive a fake command runner. They do not install a package, start
-systemd, or accept any native matrix row.
+Package steps use a fake command runner; process cleanup uses local Python
+children. Tests do not install a package, start systemd, or accept a native row.
 """
 
 from __future__ import annotations
@@ -735,10 +735,11 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
         self.assertEqual(echo.exit_code, 0)
         self.assertEqual(echo.stdout, "eof")
 
-    def _pipe_holder_script(self, pidfile: Path, sleep_seconds: int) -> str:
+    def _pipe_holder_script(self, pidfile: Path, sleep_seconds: int, *, new_session: bool = False) -> str:
         return (
             "import os, subprocess, sys\n"
-            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep({sleep_seconds})'])\n"
+            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep({sleep_seconds})'], "
+            f"start_new_session={new_session})\n"
             f"handle = open({str(pidfile)!r}, 'w')\n"
             "handle.write('{} {}\\n'.format(os.getpid(), child.pid))\n"
             "handle.close()\n"
@@ -780,7 +781,36 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
             self.assertLess(elapsed, 1.5)
             self._assert_descendant_gone(child)
 
+    def test_subprocess_cleanup_is_bounded_when_pipe_holder_changes_session(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pidfile = Path(temp) / "pid"
+            try:
+                started = time.monotonic()
+                result = SubprocessRunner().run(
+                    [sys.executable, "-c", self._pipe_holder_script(pidfile, 4, new_session=True)],
+                    timeout=0.5,
+                )
+                elapsed = time.monotonic() - started
+                self.assertTrue(result.timed_out)
+                self.assertIsNone(result.exit_code)
+                self.assertLess(elapsed, 3.0, "stream closure must not outlive the cleanup budget")
+                # Cleanup owns the original group and our pipe ends, not the
+                # daemon's new group. The fixture owns and kills that process.
+                os.kill(self._descendant_pid(pidfile), 0)
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(self._descendant_pid(pidfile), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_subprocess_interrupt_kills_pipe_holder_after_leader_exits(self):
+        self._check_interrupted_pipe_holder(new_session=False)
+
+    def test_subprocess_interrupt_cleanup_is_bounded_when_pipe_holder_changes_session(self):
+        self._check_interrupted_pipe_holder(new_session=True)
+
+    def _check_interrupted_pipe_holder(self, *, new_session: bool):
         with tempfile.TemporaryDirectory() as temp:
             pidfile = Path(temp) / "pid"
             stop = threading.Event()
@@ -798,26 +828,44 @@ class DebLifecycleAcceptanceTests(unittest.TestCase):
             previous = signal.signal(signal.SIGINT, signal.default_int_handler)
             poker = threading.Thread(target=raise_interrupt, daemon=True)
             poker.start()
-            child = None
             started = time.monotonic()
             try:
                 with self.assertRaises(KeyboardInterrupt):
                     SubprocessRunner(allow_mutation=False).run(
-                        [sys.executable, "-c", self._pipe_holder_script(pidfile, 5)],
+                        [sys.executable, "-c", self._pipe_holder_script(pidfile, 5, new_session=new_session)],
                         timeout=10,
                     )
                 elapsed = time.monotonic() - started
                 self.assertLess(elapsed, 2.0)
                 child = self._descendant_pid(pidfile)
-                self._assert_descendant_gone(child)
+                if new_session:
+                    os.kill(child, 0)
+                else:
+                    self._assert_descendant_gone(child)
             finally:
                 stop.set()
+                poker.join(timeout=1)
                 signal.signal(signal.SIGINT, previous)
-                if child is not None:
+                if pidfile.exists():
                     try:
-                        os.kill(child, 9)
+                        os.kill(self._descendant_pid(pidfile), signal.SIGKILL)
                     except OSError:
                         pass
+
+    def test_subprocess_preserves_split_text_and_newlines(self):
+        data = b"A" * 4095 + "中🙂".encode("utf-8") + b"\r\nB\rC\n\xff"
+        script = (
+            "import os\n"
+            f"data = {data!r}\n"
+            "for fd in (1, 2):\n"
+            "    for offset in range(0, len(data), 4096):\n"
+            "        os.write(fd, data[offset:offset + 4096])\n"
+        )
+        result = SubprocessRunner().run([sys.executable, "-c", script], timeout=2)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "A" * 4095 + "中🙂\nB\nC\n\ufffd")
+        self.assertEqual(result.stderr, result.stdout)
 
     def test_subprocess_interrupt_reaps_the_child_before_returning(self):
         with tempfile.TemporaryDirectory() as temp:

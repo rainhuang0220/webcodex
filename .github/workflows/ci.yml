@@ -214,7 +214,7 @@ jobs:
       - name: Check build identity and incremental boundary
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_build_identity
       - name: Check Debian package lifecycle harness
-        # Fake command runner only. This does not accept a native matrix row.
+        # Fake package steps and local child processes; no native matrix acceptance.
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_deb_lifecycle_acceptance
       - name: Check formatting
         run: cargo fmt --all -- --check
